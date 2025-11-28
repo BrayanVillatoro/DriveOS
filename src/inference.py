@@ -45,9 +45,11 @@ class InferenceEngine:
         
         # Enable CPU optimizations
         if self.device.type == 'cpu':
-            # Use optimized CPU inference
+            # Use optimized CPU inference with all available threads
             torch.set_num_threads(16)
-            logger.info("Running on CPU with 16 threads (consider GPU for 30-100x speedup)")
+            logger.info("✓ Running on CPU with 16-thread optimization")
+        else:
+            logger.info(f"✓ Running on GPU: {self.device}")
         
         # Racing line buffer for visualization (stores recent points)
         self.racing_line_buffer = []

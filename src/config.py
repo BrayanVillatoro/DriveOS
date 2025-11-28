@@ -59,10 +59,23 @@ class Config:
     
     @classmethod
     def get_device(cls):
-        """Get the computing device (GPU or CPU)"""
+        """Get the computing device (GPU or CPU) - uses CPU for maximum compatibility"""
         import torch
-        if cls.USE_GPU and torch.cuda.is_available():
-            return torch.device("cuda")
+        
+        if not cls.USE_GPU:
+            return torch.device("cpu")
+        
+        # DirectML has compatibility issues with LSTM operations
+        # Use CUDA if available (for compatible GPUs)
+        if torch.cuda.is_available():
+            try:
+                # Test if GPU is actually usable
+                test = torch.zeros(1).cuda()
+                return torch.device("cuda")
+            except:
+                pass
+        
+        # Use CPU for maximum compatibility (optimized with 16 threads)
         return torch.device("cpu")
 
 
