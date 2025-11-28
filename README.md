@@ -1,17 +1,167 @@
-# DriveOS
+# 🏁 DriveOS - AI Racing Line Analyzer
 
-DriveOS is an intelligent racing-line analysis system that uses machine learning to identify the fastest, most efficient path around any track. It processes onboard video and telemetry to deliver real-time insights that help drivers improve lap times and racecraft.
+**AI-powered racing line analysis to find the fastest, most efficient path around any track**
 
-## Features
+[![Python 3.9-3.11](https://img.shields.io/badge/python-3.9--3.11-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 
-- 🎥 **Video Analysis**: Process onboard racing video to detect track boundaries and racing lines
-- 📊 **Telemetry Processing**: Analyze speed, throttle, brake, steering, and other telemetry data
-- 🤖 **ML-Powered Predictions**: Deep learning models for optimal racing line prediction
-- ⚡ **Real-Time Processing**: Low-latency inference for live analysis
-- 📈 **Performance Insights**: Actionable feedback for driver improvement
-- 🔄 **Lap Comparison**: Compare telemetry between different laps
-- 🌐 **REST API**: Easy integration with other applications
-- 🐳 **Docker Support**: Simple deployment with containerization
+## 🚀 Quick Start (Recommended for Most Users)
+
+### Easy Installation
+
+1. **Download** this repository (click "Code" → "Download ZIP")
+2. **Extract** the ZIP file to any location
+3. **Double-click** `INSTALL.bat` to start the installation wizard
+4. Follow the on-screen instructions
+5. **Launch** DriveOS from your Desktop shortcut or Start Menu!
+
+That's it! The installer will automatically:
+- Check your Python version
+- Create a virtual environment
+- Install all required dependencies
+- Create desktop and Start Menu shortcuts
+- Set up screen capture support (optional)
+
+### System Requirements
+
+- **Operating System:** Windows 10 or newer
+- **Python:** 3.9, 3.10, or 3.11 ([Download here](https://www.python.org/downloads/))
+  - ⚠️ Make sure to check "Add Python to PATH" during Python installation
+- **Disk Space:** ~2 GB for installation
+- **RAM:** 8 GB minimum (16 GB recommended)
+- **CPU:** Multi-core processor (16+ threads recommended for CPU processing)
+
+## ✨ Features
+
+- **🎥 Multiple Input Sources:**
+  - Video files (MP4, AVI, MOV, MKV)
+  - Webcam/Camera feed
+  - Screen capture (perfect for sim racing!)
+
+- **🤖 AI-Powered Analysis:**
+  - Deep learning models (DeepLabV3 + LSTM)
+  - Real-time racing line detection
+  - Track edge and curb identification
+  - Off-track area detection
+
+- **📊 Visual Feedback:**
+  - Purple line = Optimal racing line
+  - Cyan overlay = Track edges
+  - Green zones = Safe racing area
+  - Red highlights = Off-track areas
+
+- **🎯 Professional GUI:**
+  - Easy-to-use interface
+  - Real-time statistics
+  - Progress tracking
+  - Batch video processing
+
+## 🎮 Perfect for Sim Racing
+
+DriveOS supports **screen capture**, making it perfect for analyzing your sim racing sessions in real-time! Works with:
+- iRacing
+- Assetto Corsa / Assetto Corsa Competizione
+- F1 games
+- Gran Turismo (via capture card)
+- Any racing game or simulator
+
+## 📖 How to Use
+
+### 1. Analyze a Video
+
+1. Launch DriveOS
+2. Go to the **"Analyze Video"** tab
+3. Click **"Select Video"** and choose your racing video
+4. Click **"ANALYZE VIDEO WITH AI"**
+5. Wait for processing to complete
+6. Your analyzed video will be saved with the optimal racing line highlighted!
+
+### 2. Live Preview
+
+1. Go to the **"Live Preview"** tab
+2. Choose your source:
+   - **Video File:** Select a video to preview
+   - **Webcam/Camera:** Select camera index and test connection
+   - **Screen Capture:** Capture your sim racing gameplay in real-time
+3. Click **"Start Processing"**
+4. Watch real-time racing line analysis!
+
+### 3. Train the Model
+
+1. Go to the **"Train Model"** tab
+2. Click **"Generate Training Data"** and select a racing video
+3. Adjust training parameters (epochs, batch size, learning rate)
+4. Click **"Start Training"**
+5. Wait for training to complete (may take 30-60 minutes)
+
+## 🛠️ Advanced Installation (For Developers)
+
+If you want to modify the code or contribute to the project:
+
+```bash
+# Clone the repository
+git clone https://github.com/BrayanVillatoro/DriveOS.git
+cd DriveOS
+
+# Create virtual environment
+python -m venv .venv
+
+# Activate virtual environment
+.venv\Scripts\activate  # Windows
+
+# Install PyTorch (CPU version)
+pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
+
+# Install other dependencies
+pip install -r requirements.txt
+
+# (Optional) Install screen capture support
+pip install mss
+
+# Launch the GUI
+python launch_gui.py
+```
+
+## 🧠 Technical Details
+
+### Architecture
+
+- **Vision Model:** DeepLabV3 with ResNet50 backbone
+- **Telemetry Model:** LSTM for temporal sequence analysis
+- **Fusion Model:** Combines vision and telemetry predictions
+- **Training:** Supervised learning with auto-generated labels
+- **Inference:** Optimized for CPU with 16-thread processing
+
+### Performance
+
+- **CPU Processing:** ~30 FPS on 16-thread CPU
+- **Resolution:** 320x320 optimized for speed
+- **GPU Support:** Currently optimized for CPU (GPU support for newer cards coming in PyTorch 2.9+)
+
+### Files & Directories
+
+```
+DriveOS/
+├── INSTALL.bat          # Quick installer launcher
+├── installer.py         # Installation wizard
+├── launch_gui.py        # GUI launcher
+├── DriveOS.bat         # Direct launcher (after installation)
+├── src/
+│   ├── gui.py          # Main GUI application
+│   ├── inference.py    # Inference engine
+│   ├── models.py       # ML model architectures
+│   ├── train.py        # Training script
+│   └── config.py       # Configuration
+├── models/             # Trained model weights
+├── data/
+│   └── training/       # Training data
+└── requirements.txt    # Python dependencies
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Architecture
 
@@ -167,35 +317,47 @@ Example training script coming soon!
 - **Inference Time**: 15-30ms per frame (GPU), 100-200ms (CPU)
 - **Memory Usage**: ~2GB GPU VRAM, ~4GB RAM
 
-## Contributing
+## 📄 License
 
-Contributions are welcome! Please:
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+## ⚠️ Disclaimer
 
-## Disclaimer
+**This is research software.** DriveOS is provided for educational and research purposes. The racing line suggestions are AI-generated and should not be considered as professional racing advice. Always prioritize safety when racing.
 
-**IMPORTANT: This is research software intended for educational and research purposes only.**
+## 🐛 Troubleshooting
 
-This software is provided "as is" without warranty of any kind, express or implied. The authors and contributors of DriveOS are not liable for any injuries, damages, losses, or accidents that may occur from the use or misuse of this software. 
+### "Python not found" error
+- Install Python 3.9-3.11 from [python.org](https://www.python.org/downloads/)
+- Make sure to check "Add Python to PATH" during installation
 
-Racing and high-performance driving are inherently dangerous activities. This software is NOT a substitute for:
-- Professional driving instruction
-- Proper safety equipment and procedures
-- Track safety regulations and guidelines
-- Sound judgment and personal responsibility
+### Installation fails
+- Run `INSTALL.bat` as Administrator
+- Make sure you have internet connection
+- Check that you have ~2 GB free disk space
 
-Users assume all risks associated with racing activities. Always prioritize safety and follow all applicable laws, regulations, and track rules. The insights and recommendations provided by this software should be reviewed by qualified professionals before implementation.
+### Screen capture not working
+- Install screen capture support: The installer will prompt you
+- Or manually: `pip install mss`
 
-By using this software, you acknowledge and accept these terms and agree to hold harmless the authors, contributors, and associated parties from any and all claims, damages, or liabilities.
+### Slow processing
+- Processing speed depends on your CPU
+- Close other applications during processing
+- Consider upgrading to a multi-core CPU (16+ threads recommended)
 
-## License
+## 📧 Support
 
-MIT License - see LICENSE file for details
+For issues, questions, or suggestions:
+- Open an issue on [GitHub](https://github.com/BrayanVillatoro/DriveOS/issues)
+- Check existing issues for solutions
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+---
+
+Made with ❤️ for the racing community
 
 ## Acknowledgments
 

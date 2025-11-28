@@ -140,6 +140,68 @@ class DriveOSGUI:
                          style='Title.TLabel')
         title.pack(side='left')
         
+        # Source selection frame
+        source_frame = ttk.LabelFrame(self.live_tab, text="Video Source", padding=15)
+        source_frame.pack(fill='x', padx=20, pady=10)
+        
+        # Source type selector
+        source_type_frame = ttk.Frame(source_frame)
+        source_type_frame.pack(fill='x', pady=(0, 10))
+        
+        ttk.Label(source_type_frame, text="Source Type:", style='Info.TLabel').pack(side='left', padx=(0, 10))
+        
+        self.source_type_var = tk.StringVar(value="video")
+        
+        ttk.Radiobutton(source_type_frame, text="📹 Video File", 
+                       variable=self.source_type_var, value="video",
+                       command=self.update_source_controls).pack(side='left', padx=10)
+        
+        ttk.Radiobutton(source_type_frame, text="📷 Webcam/Camera", 
+                       variable=self.source_type_var, value="camera",
+                       command=self.update_source_controls).pack(side='left', padx=10)
+        
+        ttk.Radiobutton(source_type_frame, text="🖥️ Screen Capture", 
+                       variable=self.source_type_var, value="screen",
+                       command=self.update_source_controls).pack(side='left', padx=10)
+        
+        # Source-specific controls
+        self.source_controls_frame = ttk.Frame(source_frame)
+        self.source_controls_frame.pack(fill='x')
+        
+        # Video file controls
+        self.video_controls = ttk.Frame(self.source_controls_frame)
+        self.live_video_path_var = tk.StringVar(value="No video selected")
+        ttk.Label(self.video_controls, textvariable=self.live_video_path_var, 
+                 style='Info.TLabel').pack(side='left', padx=(0, 10))
+        ttk.Button(self.video_controls, text="📁 Browse", 
+                  command=self.select_live_video).pack(side='left', padx=5)
+        
+        # Camera controls
+        self.camera_controls = ttk.Frame(self.source_controls_frame)
+        ttk.Label(self.camera_controls, text="Camera Index:", 
+                 style='Info.TLabel').pack(side='left', padx=(0, 10))
+        self.camera_index_var = tk.IntVar(value=0)
+        ttk.Spinbox(self.camera_controls, from_=0, to=10, 
+                   textvariable=self.camera_index_var, width=10).pack(side='left', padx=5)
+        ttk.Button(self.camera_controls, text="🔍 Test Camera",
+                  command=self.test_camera).pack(side='left', padx=5)
+        
+        # Screen capture controls
+        self.screen_controls = ttk.Frame(self.source_controls_frame)
+        ttk.Label(self.screen_controls, text="Capture Mode:", 
+                 style='Info.TLabel').pack(side='left', padx=(0, 10))
+        self.screen_mode_var = tk.StringVar(value="fullscreen")
+        screen_mode_combo = ttk.Combobox(self.screen_controls, 
+                                        textvariable=self.screen_mode_var,
+                                        values=['fullscreen', 'window'], 
+                                        state='readonly', width=15)
+        screen_mode_combo.pack(side='left', padx=5)
+        ttk.Label(self.screen_controls, text="(Window selection will appear on start)", 
+                 style='Info.TLabel', foreground='#999999').pack(side='left', padx=10)
+        
+        # Show initial controls
+        self.video_controls.pack(fill='x')
+        
         # Video display area
         video_frame = ttk.LabelFrame(self.live_tab, text="Video Feed", padding=10)
         video_frame.pack(fill='both', expand=True, padx=20, pady=10)
@@ -150,7 +212,7 @@ class DriveOSGUI:
         self.live_canvas.pack()
         
         # Status label
-        self.live_status = ttk.Label(video_frame, text="Ready - Select a video to start",
+        self.live_status = ttk.Label(video_frame, text="Ready - Select a source to start",
                                     style='Info.TLabel')
         self.live_status.pack(pady=5)
         
@@ -158,11 +220,7 @@ class DriveOSGUI:
         controls = ttk.Frame(self.live_tab)
         controls.pack(fill='x', padx=20, pady=10)
         
-        ttk.Button(controls, text="Select Video", 
-                  command=self.select_live_video,
-                  style='Accent.TButton').pack(side='left', padx=5)
-        
-        self.play_btn = ttk.Button(controls, text="▶ Play",
+        self.play_btn = ttk.Button(controls, text="▶ Start Processing",
                                    command=self.start_live_processing,
                                    state='disabled')
         self.play_btn.pack(side='left', padx=5)
@@ -367,17 +425,61 @@ class DriveOSGUI:
         self.metrics_text.pack(fill='both', expand=True)
         
     # Live View Methods
-    def select_live_video(self):
-        """Select video for live processing"""
-        file_path = filedialog.askopenfilename(
-            title="Select Video",
-            filetypes=[("Video files", "*.mp4 *.avi *.mov"), ("All files", "*.*")]
-        )
+    def update_source_controls(self):
+        """Update source controls based on selected type"""
+        # Hide all controls
+        self.video_controls.pack_forget()
+        self.camera_controls.pack_forget()
+        self.screen_controls.pack_forget()
+        
+        # Show relevant controls
+        source_type = self.source_type_var.get()
+        if source_type == "video":
+            self.video_controls.pack(fill='x')
+            self.live_status.config(text="Select a video file to begin")
+    def start_live_processing(self):
+        """Start live video processing"""
+        source_type = self.source_type_var.get()
+        
+        # Validate source
+        if source_type == "video" and not hasattr(self, 'current_video_path'):
+            messagebox.showwarning("No Source", "Please select a video file first")
+            return
+        
+        self.is_processing = True
+        self.stop_processing = False
+        self.play_btn.config(state='disabled')
+        self.stop_btn.config(state='normal')
+        
+        # Start processing thread
+        thread = threading.Thread(target=self.live_processing_thread, daemon=True)
+        thread.start()
+        
+        # Start display update
+        self.update_live_display()
         
         if file_path:
             self.current_video_path = file_path
+            self.live_video_path_var.set(Path(file_path).name)
             self.live_status.config(text=f"Selected: {Path(file_path).name}")
             self.play_btn.config(state='normal')
+    
+    def test_camera(self):
+        """Test camera connection"""
+        camera_index = self.camera_index_var.get()
+        try:
+            cap = cv2.VideoCapture(camera_index)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                cap.release()
+                if ret:
+                    messagebox.showinfo("Camera Test", f"✓ Camera {camera_index} is working!")
+                else:
+                    messagebox.showerror("Camera Test", f"Camera {camera_index} opened but failed to read frame")
+            else:
+                messagebox.showerror("Camera Test", f"Cannot open camera {camera_index}")
+        except Exception as e:
+            messagebox.showerror("Camera Test", f"Error testing camera: {str(e)}")
             
     def start_live_processing(self):
         """Start live video processing"""
@@ -400,21 +502,79 @@ class DriveOSGUI:
         """Stop live processing"""
         self.stop_processing = True
         self.is_processing = False
-        self.play_btn.config(state='normal')
-        self.stop_btn.config(state='disabled')
-        self.live_status.config(text="Stopped")
-        
     def live_processing_thread(self):
         """Background thread for live processing"""
         try:
             processor = BatchProcessor('models/racing_line_model.pth')
-            cap = cv2.VideoCapture(self.current_video_path)
             
+            # Determine capture source
+            source_type = self.source_type_var.get()
+            
+            if source_type == "video":
+                cap = cv2.VideoCapture(self.current_video_path)
+            elif source_type == "camera":
+                camera_index = self.camera_index_var.get()
+                cap = cv2.VideoCapture(camera_index)
+                if not cap.isOpened():
+                    self.live_status.config(text=f"Error: Cannot open camera {camera_index}")
+                    self.stop_processing = True
+                    return
+            elif source_type == "screen":
+                # Import screen capture libraries
+                try:
+                    import mss
+                    import mss.tools
+                    
+                    sct = mss.mss()
+                    
+                    # If window mode, get the monitor (full screen for now)
+                    monitor = sct.monitors[1]  # Primary monitor
+                    
+                    frame_count = 0
+                    import time
+                    
+                    while not self.stop_processing:
+                        # Capture screen
+                        sct_img = sct.grab(monitor)
+                        frame = np.array(sct_img)
+                        
+                        # Convert from BGRA to BGR
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                        
+                        # Process frame
+                        prediction = processor.engine.predict(frame, None)
+                        result_frame = processor.engine.visualize_prediction(frame, prediction)
+                        
+                        # Convert to RGB for display
+                        result_frame = cv2.cvtColor(result_frame, cv2.COLOR_BGR2RGB)
+                        
+                        # Put in queue (non-blocking)
+                        try:
+                            self.frame_queue.put_nowait((result_frame, frame_count, prediction))
+                        except queue.Full:
+                            pass
+                        
+                        frame_count += 1
+                        time.sleep(0.033)  # ~30 FPS
+                        
+                    sct.close()
+                    self.stop_processing = True
+                    return
+                    
+                except ImportError:
+                    self.live_status.config(text="Error: mss library required for screen capture. Install with: pip install mss")
+                    self.stop_processing = True
+                    return
+            
+            # Standard video/camera processing loop
             frame_count = 0
             while not self.stop_processing and cap.isOpened():
                 ret, frame = cap.read()
                 if not ret:
-                    break
+                    if source_type == "video":
+                        break  # End of video
+                    else:
+                        continue  # Camera error, try again
                 
                 # Process frame
                 prediction = processor.engine.predict(frame, None)
@@ -432,6 +592,10 @@ class DriveOSGUI:
                 frame_count += 1
                 
             cap.release()
+            self.stop_processing = True
+            
+        except Exception as e:
+            self.live_status.config(text=f"Error: {str(e)}")
             self.stop_processing = True
             
         except Exception as e:

@@ -34,7 +34,7 @@ class InferenceEngine:
         # Load model weights
         if model_path:
             try:
-                checkpoint = torch.load(model_path, map_location=self.device)
+                checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
                 self.model.load_state_dict(checkpoint['model_state_dict'])
                 logger.info(f"Model loaded from {model_path}")
             except Exception as e:
