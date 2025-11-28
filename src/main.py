@@ -77,7 +77,12 @@ def analyze_video(args):
     """Analyze racing video"""
     logger.info(f"Analyzing video: {args.video}")
     
-    output_path = args.output or str(Path(args.video).parent / f"analyzed_{Path(args.video).name}")
+    # Default output to Videos folder if not specified
+    if args.output:
+        output_path = args.output
+    else:
+        videos_folder = Path.home() / "Videos"
+        output_path = str(videos_folder / f"analyzed_{Path(args.video).name}")
     
     processor = BatchProcessor(args.model)
     stats = processor.process_video(

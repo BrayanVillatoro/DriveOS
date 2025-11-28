@@ -29,18 +29,24 @@ class RacingLineDetector(nn.Module):
         super(RacingLineDetector, self).__init__()
         
         # Use ResNet50 as backbone with DeepLabV3
-        self.backbone = models.segmentation.deeplabv3_resnet50(
-            pretrained=pretrained,
-            num_classes=num_classes
-        )
+        if pretrained:
+            # Load pretrained model with default classes, then modify
+            self.backbone = models.segmentation.deeplabv3_resnet50(pretrained=True)
+            # Replace classifier head with custom num_classes
+            self.backbone.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=1)
+            self.backbone.aux_classifier[4] = nn.Conv2d(256, num_classes, kernel_size=1)
+        else:
+            # Create model from scratch with custom classes
+            self.backbone = models.segmentation.deeplabv3_resnet50(pretrained=False, num_classes=num_classes)
         
         # Additional regression head for line confidence
+        # Note: Will extract features from backbone's layer3 (1024 channels for ResNet50)
         self.confidence_head = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.Conv2d(1024, 512, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.Conv2d(512, 128, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 1, kernel_size=1),
+            nn.Conv2d(128, 1, kernel_size=1),
             nn.Sigmoid()
         )
         
@@ -202,14 +208,15 @@ class RacingLineOptimizer(nn.Module):
         self.vision_model = RacingLineDetector()
         self.telemetry_model = TelemetryLSTM()
         
-        # Fusion layer
+        # Fusion layer - simplified for untrained use
+        # Vision confidence (1 feature) + telemetry prediction (3 features) = 4 total
         self.fusion = nn.Sequential(
-            nn.Linear(640 * 640 + 3, 256),  # Vision features + telemetry
+            nn.Linear(4, 64),  # 1 from vision + 3 from telemetry
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(256, 128),
+            nn.Linear(64, 32),
             nn.ReLU(),
-            nn.Linear(128, 2)  # Output: (optimal_x, optimal_y) on track
+            nn.Linear(32, 2)  # Output: (optimal_x, optimal_y) on track
         )
         
     def forward(self, image: torch.Tensor, telemetry_seq: torch.Tensor):
@@ -225,6 +232,7 @@ class RacingLineOptimizer(nn.Module):
         """
         # Vision branch
         seg_map, confidence = self.vision_model(image)
+        # Global average pooling to get single confidence value
         vision_features = F.adaptive_avg_pool2d(confidence, (1, 1)).view(image.size(0), -1)
         
         # Telemetry branch

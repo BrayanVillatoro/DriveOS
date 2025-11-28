@@ -43,6 +43,16 @@ class InferenceEngine:
         self.model.to(self.device)
         self.model.eval()
         
+        # Enable CPU optimizations
+        if self.device.type == 'cpu':
+            # Use optimized CPU inference
+            torch.set_num_threads(16)
+            logger.info("Running on CPU with 16 threads (consider GPU for 30-100x speedup)")
+        
+        # Racing line buffer for visualization (stores recent points)
+        self.racing_line_buffer = []
+        self.max_line_points = 30  # Show last 30 points (~1 second at 30fps)
+        
         # Telemetry buffer for sequence processing
         self.telemetry_buffer: List[TelemetryPoint] = []
         self.buffer_size = 100  # Number of telemetry points to keep
@@ -57,8 +67,8 @@ class InferenceEngine:
         Returns:
             Preprocessed tensor
         """
-        # Resize
-        resized = cv2.resize(frame, (640, 640))
+        # Resize to smaller resolution for faster CPU processing
+        resized = cv2.resize(frame, (320, 320))
         
         # Convert BGR to RGB and normalize
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
@@ -167,19 +177,65 @@ class InferenceEngine:
             interpolation=cv2.INTER_NEAREST
         )
         
-        # Create colored overlay for racing line
+        # Detect track edges/boundaries
+        # Find contours for track boundaries (class 0 = track surface)
+        track_mask = (seg_map == 0).astype(np.uint8) * 255
+        edges = cv2.Canny(track_mask, 50, 150)
+        
+        # Dilate edges to make them more visible
+        kernel = np.ones((3, 3), np.uint8)
+        edges_thick = cv2.dilate(edges, kernel, iterations=2)
+        
+        # Create colored overlay
         overlay = np.zeros_like(frame)
-        overlay[seg_map == 1] = [0, 255, 0]  # Green for racing line
+        
+        # Highlight track boundaries in bright cyan
+        overlay[edges_thick > 0] = [255, 255, 0]  # Cyan for track edges
+        
+        # Show racing line area in semi-transparent green
+        overlay[seg_map == 1] = [0, 255, 0]  # Green for optimal racing line zone
+        
+        # Show off-track areas in red
         overlay[seg_map == 2] = [0, 0, 255]  # Red for off-track
         
-        # Blend overlay
-        result = cv2.addWeighted(result, 0.7, overlay, 0.3, 0)
+        # Blend overlay with original frame
+        result = cv2.addWeighted(result, 0.75, overlay, 0.25, 0)
         
-        # Draw optimal point
+        # Add current optimal point to buffer
         opt_x, opt_y = prediction['optimal_line']
         point_x = int((opt_x + 1) / 2 * w)  # Convert from [-1, 1] to [0, w]
         point_y = int((opt_y + 1) / 2 * h)
-        cv2.circle(result, (point_x, point_y), 10, (255, 0, 255), -1)
+        self.racing_line_buffer.append((point_x, point_y))
+        
+        # Keep buffer size limited
+        if len(self.racing_line_buffer) > self.max_line_points:
+            self.racing_line_buffer.pop(0)
+        
+        # Draw racing line path that driver should follow
+        if len(self.racing_line_buffer) >= 2:
+            # Draw thick background line first (for better visibility)
+            for i in range(len(self.racing_line_buffer) - 1):
+                pt1 = self.racing_line_buffer[i]
+                pt2 = self.racing_line_buffer[i + 1]
+                
+                # Black outline for contrast
+                cv2.line(result, pt1, pt2, (0, 0, 0), 12)
+            
+            # Draw colored racing line on top
+            for i in range(len(self.racing_line_buffer) - 1):
+                pt1 = self.racing_line_buffer[i]
+                pt2 = self.racing_line_buffer[i + 1]
+                
+                # Fade effect: newer points are brighter
+                alpha = (i + 1) / len(self.racing_line_buffer)
+                thickness = int(4 + alpha * 4)  # 4-8 pixels thick
+                
+                # Bright purple/magenta line for the racing line to follow
+                cv2.line(result, pt1, pt2, (255, 0, 255), thickness)
+            
+            # Draw a larger circle at the current target point with outline
+            cv2.circle(result, self.racing_line_buffer[-1], 12, (0, 0, 0), -1)  # Black outline
+            cv2.circle(result, self.racing_line_buffer[-1], 10, (255, 255, 0), -1)  # Yellow center
         
         # Add confidence indicator
         confidence = prediction['confidence'].mean()
