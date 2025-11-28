@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  driveos-api:
+    build: .
+    container_name: driveos-api
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - USE_GPU=false
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - driveos-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: driveos-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - driveos-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: driveos-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./web:/usr/share/nginx/html:ro
+    depends_on:
+      - driveos-api
+    restart: unless-stopped
+    networks:
+      - driveos-network
+
+volumes:
+  redis-data:
+
+networks:
+  driveos-network:
+    driver: bridge
