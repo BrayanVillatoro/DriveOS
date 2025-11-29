@@ -93,21 +93,12 @@ if not exist DriveOS.ico (
     .venv\Scripts\python.exe create_icon.py >nul 2>&1
 )
 
-echo Set oWS = WScript.CreateObject("WScript.Shell") > "%TEMP%\CreateShortcut.vbs"
-echo sLinkFile = "%USERPROFILE%\Desktop\DriveOS.lnk" >> "%TEMP%\CreateShortcut.vbs"
-echo Set oLink = oWS.CreateShortcut(sLinkFile) >> "%TEMP%\CreateShortcut.vbs"
-echo oLink.TargetPath = "%CD%\DriveOS.bat" >> "%TEMP%\CreateShortcut.vbs"
-echo oLink.WorkingDirectory = "%CD%" >> "%TEMP%\CreateShortcut.vbs"
-echo oLink.Description = "DriveOS Racing Line Analyzer" >> "%TEMP%\CreateShortcut.vbs"
-echo oLink.IconLocation = "%CD%\DriveOS.ico" >> "%TEMP%\CreateShortcut.vbs"
-echo oLink.Save >> "%TEMP%\CreateShortcut.vbs"
-cscript //nologo "%TEMP%\CreateShortcut.vbs" 2>nul
+powershell -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%USERPROFILE%\Desktop\DriveOS.lnk'); $s.TargetPath = '%CD%\DriveOS.bat'; $s.WorkingDirectory = '%CD%'; $s.Description = 'DriveOS Racing Line Analyzer'; $s.IconLocation = '%CD%\DriveOS.ico'; $s.Save()" >nul 2>&1
 if exist "%USERPROFILE%\Desktop\DriveOS.lnk" (
     echo    Shortcut created successfully!
 ) else (
     echo    Warning: Could not create shortcut
 )
-del "%TEMP%\CreateShortcut.vbs" 2>nul
 
 echo.
 echo ========================================
