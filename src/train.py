@@ -136,15 +136,25 @@ def train_model(data_dir: str,
     train_dataset = RacingLineDataset(data_dir, split='train')
     val_dataset = RacingLineDataset(data_dir, split='val')
     
+    # Check minimum dataset size
+    if len(train_dataset) < batch_size * 2:
+        logger.warning(f"Training set has only {len(train_dataset)} samples, need at least {batch_size * 2} for stable training")
+        logger.warning("Reducing batch size to fit available data")
+        batch_size = max(2, len(train_dataset) // 2)  # Use at least 2 for BatchNorm
+    
+    if len(train_dataset) < 2:
+        raise ValueError(f"Need at least 2 training samples, found {len(train_dataset)}. Generate more training data first.")
+    
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
         shuffle=True,
-        num_workers=0  # Use 0 for Windows compatibility
+        num_workers=0,  # Use 0 for Windows compatibility
+        drop_last=True  # Always drop incomplete batches to avoid BatchNorm issues
     )
     val_loader = DataLoader(
         val_dataset, 
-        batch_size=batch_size, 
+        batch_size=1,  # Use batch size of 1 for validation to avoid issues
         shuffle=False,
         num_workers=0
     )

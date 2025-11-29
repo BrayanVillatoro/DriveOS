@@ -145,7 +145,7 @@ if not exist DriveOS.ico (
 )
 
 echo Creating desktop shortcut... >> "%LOGFILE%"
-powershell -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%USERPROFILE%\Desktop\DriveOS.lnk'); $s.TargetPath = '%CD%\DriveOS.bat'; $s.WorkingDirectory = '%CD%'; $s.Description = 'DriveOS Racing Line Analyzer'; $s.IconLocation = '%CD%\DriveOS.ico'; $s.Save()" >> "%LOGFILE%" 2>&1
+powershell -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%USERPROFILE%\Desktop\DriveOS.lnk'); $s.TargetPath = '%CD%\DriveOS.vbs'; $s.WorkingDirectory = '%CD%'; $s.Description = 'DriveOS Racing Line Analyzer'; $s.IconLocation = '%CD%\DriveOS.ico'; $s.Save()" >> "%LOGFILE%" 2>&1
 if exist "%USERPROFILE%\Desktop\DriveOS.lnk" (
     echo    Shortcut created successfully!
     echo Shortcut created successfully >> "%LOGFILE%"

@@ -46,8 +46,11 @@ logs/
 *.log
 
 # Data
-data/*
-!data/.gitkeep
+# Allow sample training data, but ignore user-generated data directories
+data/user_data/
+data/recordings/
+data/*.zip
+data/*.tar.gz
 
 # Models
 models/*.pth
