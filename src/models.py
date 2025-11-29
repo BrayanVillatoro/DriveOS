@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
+from torchvision.models.segmentation import DeepLabV3_ResNet50_Weights
 import numpy as np
 from typing import Tuple, Optional
 import logging
@@ -30,14 +31,19 @@ class RacingLineDetector(nn.Module):
         
         # Use ResNet50 as backbone with DeepLabV3
         if pretrained:
-            # Load pretrained model with default classes, then modify
-            self.backbone = models.segmentation.deeplabv3_resnet50(pretrained=True)
+            # Load pretrained model with proper weights enum (fixes deprecation warning)
+            self.backbone = models.segmentation.deeplabv3_resnet50(
+                weights=DeepLabV3_ResNet50_Weights.DEFAULT
+            )
             # Replace classifier head with custom num_classes
             self.backbone.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=1)
             self.backbone.aux_classifier[4] = nn.Conv2d(256, num_classes, kernel_size=1)
         else:
             # Create model from scratch with custom classes
-            self.backbone = models.segmentation.deeplabv3_resnet50(pretrained=False, num_classes=num_classes)
+            self.backbone = models.segmentation.deeplabv3_resnet50(
+                weights=None, 
+                num_classes=num_classes
+            )
         
         # Additional regression head for line confidence
         # Note: Will extract features from backbone's layer3 (1024 channels for ResNet50)

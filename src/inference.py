@@ -36,7 +36,16 @@ class InferenceEngine:
             try:
                 checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
                 self.model.load_state_dict(checkpoint['model_state_dict'])
-                logger.info(f"Model loaded from {model_path}")
+                logger.info(f"✓ Model loaded from {model_path}")
+            except FileNotFoundError:
+                logger.warning(
+                    f"⚠️  Model file not found: {model_path}\n"
+                    "   Using untrained model (predictions will be random).\n"
+                    "   To train the model:\n"
+                    "   1. Open the 'Train Model' tab in the GUI\n"
+                    "   2. Click 'Generate Training Data' and select a racing video\n"
+                    "   3. Click 'Start Training' (takes 30-60 minutes)\n"
+                )
             except Exception as e:
                 logger.warning(f"Could not load model: {e}. Using untrained model.")
         

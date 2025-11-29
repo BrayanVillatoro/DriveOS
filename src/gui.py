@@ -437,26 +437,22 @@ class DriveOSGUI:
         if source_type == "video":
             self.video_controls.pack(fill='x')
             self.live_status.config(text="Select a video file to begin")
-    def start_live_processing(self):
-        """Start live video processing"""
-        source_type = self.source_type_var.get()
-        
-        # Validate source
-        if source_type == "video" and not hasattr(self, 'current_video_path'):
-            messagebox.showwarning("No Source", "Please select a video file first")
-            return
-        
-        self.is_processing = True
-        self.stop_processing = False
-        self.play_btn.config(state='disabled')
-        self.stop_btn.config(state='normal')
-        
-        # Start processing thread
-        thread = threading.Thread(target=self.live_processing_thread, daemon=True)
-        thread.start()
-        
-        # Start display update
-        self.update_live_display()
+            self.play_btn.config(state='disabled')
+        elif source_type == "camera":
+            self.camera_controls.pack(fill='x')
+            self.live_status.config(text="Ready to start camera capture")
+            self.play_btn.config(state='normal')
+        elif source_type == "screen":
+            self.screen_controls.pack(fill='x')
+            self.live_status.config(text="Ready to start screen capture")
+            self.play_btn.config(state='normal')
+    
+    def select_live_video(self):
+        """Select video for live processing"""
+        file_path = filedialog.askopenfilename(
+            title="Select Video",
+            filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv"), ("All files", "*.*")]
+        )
         
         if file_path:
             self.current_video_path = file_path
@@ -480,10 +476,14 @@ class DriveOSGUI:
                 messagebox.showerror("Camera Test", f"Cannot open camera {camera_index}")
         except Exception as e:
             messagebox.showerror("Camera Test", f"Error testing camera: {str(e)}")
-            
+    
     def start_live_processing(self):
         """Start live video processing"""
-        if not self.current_video_path:
+        source_type = self.source_type_var.get()
+        
+        # Validate source
+        if source_type == "video" and not hasattr(self, 'current_video_path'):
+            messagebox.showwarning("No Source", "Please select a video file first")
             return
         
         self.is_processing = True

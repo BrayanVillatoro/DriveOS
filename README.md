@@ -12,16 +12,18 @@
 
 1. **Download** this repository (click "Code" → "Download ZIP")
 2. **Extract** the ZIP file to any location
-3. **Double-click** `INSTALL.bat` to start the installation wizard
-4. Follow the on-screen instructions
-5. **Launch** DriveOS from your Desktop shortcut or Start Menu!
+3. **Double-click** `INSTALL.bat` to start the automatic installation
+4. Wait for the installation to complete (~2-5 minutes)
+5. **Launch** DriveOS from your Desktop shortcut!
 
 That's it! The installer will automatically:
-- Check your Python version
-- Create a virtual environment
-- Install all required dependencies
-- Create desktop and Start Menu shortcuts
-- Set up screen capture support (optional)
+- ✅ Check your Python version
+- ✅ Create a virtual environment
+- ✅ Install PyTorch and all dependencies
+- ✅ Create a Desktop shortcut
+- ✅ Set everything up for you
+
+> **Note:** If you prefer a GUI installer with more options, run `python installer.py` after installing dependencies
 
 ### System Requirements
 
