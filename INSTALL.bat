@@ -40,7 +40,7 @@ if errorlevel 1 (
 
 echo [1/6] Checking Python version...
 echo [STEP 1] Checking Python version... >> "%LOGFILE%"
-python -c "import sys; v=sys.version_info; exit(0 if 3.9<=v.major+v.minor/10<3.12 else 1)" >> "%LOGFILE%" 2>&1
+python -c "import sys; v=sys.version_info; exit(0 if (v.major == 3 and 9 <= v.minor <= 11) else 1)" >> "%LOGFILE%" 2>&1
 if errorlevel 1 (
     color 0E
     echo WARNING: Python 3.9-3.11 required! >> "%LOGFILE%"
