@@ -6,33 +6,62 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 
-## 🚀 Quick Start (Recommended for Most Users)
+## 🚀 Quick Start - Just 3 Steps!
 
-### Easy Installation
+### 📥 Installation (2-5 minutes)
 
-1. **Download** this repository (click "Code" → "Download ZIP")
-2. **Extract** the ZIP file to any location
-3. **Double-click** `INSTALL.bat` to start the automatic installation
-4. Wait for the installation to complete (~2-5 minutes)
-5. **Launch** DriveOS from your Desktop shortcut!
+1. **Download** this repository
+   - Click the green "Code" button → "Download ZIP"
+   - Or clone: `git clone https://github.com/BrayanVillatoro/DriveOS.git`
+
+2. **Extract** the ZIP file to any location on your computer
+
+3. **Double-click `INSTALL.bat`** and let it do everything!
 
 That's it! The installer will automatically:
-- ✅ Check your Python version
+- ✅ Detect your hardware (NVIDIA GPU, CPU, etc.)
+- ✅ Install the correct PyTorch version (CUDA for NVIDIA GPUs)
+- ✅ Install all dependencies (OpenCV, NumPy, etc.)
 - ✅ Create a virtual environment
-- ✅ Install PyTorch and all dependencies
 - ✅ Create a Desktop shortcut
-- ✅ Set everything up for you
+- ✅ Confirm GPU support status
 
-> **Note:** If you prefer a GUI installer with more options, run `python installer.py` after installing dependencies
+After installation completes, you'll find a **DriveOS shortcut on your Desktop**. Just double-click it to launch!
 
 ### System Requirements
 
-- **Operating System:** Windows 10 or newer
+**Minimum Requirements:**
+- **Operating System:** Windows 10 or newer (64-bit)
 - **Python:** 3.9, 3.10, or 3.11 ([Download here](https://www.python.org/downloads/))
-  - ⚠️ Make sure to check "Add Python to PATH" during Python installation
-- **Disk Space:** ~2 GB for installation
-- **RAM:** 8 GB minimum (16 GB recommended)
-- **CPU:** Multi-core processor (16+ threads recommended for CPU processing)
+  - ⚠️ **IMPORTANT:** Check "Add Python to PATH" during Python installation
+- **Processor:** Intel Core i5 / AMD Ryzen 5 or better (4+ cores)
+- **RAM:** 8 GB minimum
+- **Disk Space:** 5 GB free space (for installation and models)
+- **Graphics:** Any GPU or integrated graphics (for display only)
+
+**Recommended for Better Performance:**
+- **Processor:** Intel Core i7/i9 or AMD Ryzen 7/9 (8+ cores, 16+ threads)
+- **RAM:** 16 GB or more
+- **Disk Space:** 10 GB+ (for training data storage)
+
+**NVIDIA GPU Acceleration (Optional but Recommended for Training):**
+- **Graphics Card:** NVIDIA GPU with CUDA support
+  - GTX 1060 6GB or better (older GPUs)
+  - RTX 2060 or better (recommended)
+  - RTX 3060 or better (great performance)
+  - RTX 4060 or better (excellent performance)
+  - RTX 5070 Ti / 5090 (requires PyTorch 2.9+ - coming soon)
+- **CUDA Compute Capability:** 3.5 or higher
+- **VRAM:** 4 GB minimum, 6 GB+ recommended
+- **Driver:** Latest NVIDIA Game Ready or Studio Drivers
+
+> **Note:** The installer automatically detects NVIDIA GPUs and offers CUDA installation. GPU acceleration speeds up training by 10-20x but is not required - CPU training works fine, just slower.
+
+**Why NVIDIA?**
+- **Training Speed:** GPU training is 10-20x faster than CPU
+- **Real-time Processing:** Better frame rates during live analysis
+- **Larger Models:** Can train with bigger batch sizes
+- **Native Support:** PyTorch has excellent CUDA optimization
 
 ## ✨ Features
 
@@ -97,7 +126,7 @@ DriveOS supports **screen capture**, making it perfect for analyzing your sim ra
 4. Click **"Start Training"**
 5. Wait for training to complete (may take 30-60 minutes)
 
-## 🛠️ Advanced Installation (For Developers)
+## 🛠️ Manual Installation (For Developers)
 
 If you want to modify the code or contribute to the project:
 
@@ -112,34 +141,53 @@ python -m venv .venv
 # Activate virtual environment
 .venv\Scripts\activate  # Windows
 
-# Install PyTorch (CPU version)
+# Install PyTorch with CUDA 11.8 (for NVIDIA GPUs)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# OR install CPU-only version (slower but works on any PC)
 pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
 
 # Install other dependencies
 pip install -r requirements.txt
 
-# (Optional) Install screen capture support
-pip install mss
-
 # Launch the GUI
 python launch_gui.py
 ```
+
+**Choosing the Right PyTorch:**
+- **CUDA 11.8:** Best for GTX 1000/RTX 2000/3000 series
+- **CUDA 12.1:** Better for RTX 4000 series
+- **CPU:** Works everywhere but ~10x slower for training
 
 ## 🧠 Technical Details
 
 ### Architecture
 
-- **Vision Model:** DeepLabV3 with ResNet50 backbone
-- **Telemetry Model:** LSTM for temporal sequence analysis
+- **Vision Model:** DeepLabV3 with ResNet50 backbone (pretrained on COCO)
+- **Telemetry Model:** LSTM networks for temporal sequence analysis
 - **Fusion Model:** Combines vision and telemetry predictions
-- **Training:** Supervised learning with auto-generated labels
-- **Inference:** Optimized for CPU with 16-thread processing
+- **Training:** Supervised learning with auto-generated labels from track detection
+- **Inference Engine:** Batch processing with multi-threaded CPU or GPU acceleration
 
 ### Performance
 
-- **CPU Processing:** ~30 FPS on 16-thread CPU
-- **Resolution:** 320x320 optimized for speed
-- **GPU Support:** Currently optimized for CPU (GPU support for newer cards coming in PyTorch 2.9+)
+**CPU Mode (All PCs):**
+- ~5-10 FPS processing speed
+- ~100-200ms per frame
+- Uses 8-16 threads for parallel processing
+- Good for post-session analysis
+
+**GPU Mode (NVIDIA GPUs):**
+- ~30-60 FPS processing speed
+- ~15-30ms per frame
+- 10-20x faster training
+- Excellent for real-time analysis
+
+**Processing:**
+- **Input Resolution:** 1920x1080 or 1280x720
+- **Model Resolution:** 320x320 (optimized for speed)
+- **Batch Size:** Adjustable (2-16 depending on VRAM/RAM)
+- **Output:** Same resolution as input with overlays
 
 ### Files & Directories
 
@@ -161,163 +209,24 @@ DriveOS/
 └── requirements.txt    # Python dependencies
 ```
 
-## 🤝 Contributing
+## 🎯 GPU vs CPU: What to Expect
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+**CPU Training (No NVIDIA GPU):**
+- Training 20 epochs: ~30-60 minutes
+- Processing 1 hour of video: ~10-20 minutes
+- Live preview: 5-10 FPS
+- ✅ Works on any PC
+- ✅ No special hardware needed
 
-## Architecture
+**GPU Training (NVIDIA GPU with CUDA):**
+- Training 20 epochs: ~3-5 minutes (10-20x faster)
+- Processing 1 hour of video: ~1-2 minutes
+- Live preview: 30-60 FPS
+- ✅ Much faster training
+- ✅ Real-time analysis possible
+- ⚠️ Requires NVIDIA GPU (GTX 1060+)
 
-DriveOS combines computer vision and time-series analysis:
-
-- **Vision Models**: DeepLabV3 + ResNet50 for track segmentation
-- **Telemetry Models**: LSTM networks for sequential data prediction
-- **Fusion**: Combined vision-telemetry model for optimal line detection
-
-## Installation
-
-### Prerequisites
-
-- Python 3.11+
-- CUDA-capable GPU (optional, for faster inference)
-- FFmpeg (for video processing)
-
-### Setup
-
-1. Clone the repository:
-```bash
-git clone https://github.com/BrayanVillatoro/DriveOS.git
-cd DriveOS
-```
-
-2. Create and activate virtual environment:
-```bash
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-source .venv/bin/activate  # Linux/Mac
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Configure environment:
-```bash
-cp .env.example .env
-# Edit .env with your settings
-```
-
-## Usage
-
-### Command Line Interface
-
-**Analyze a racing video:**
-```bash
-python -m src.main analyze path/to/video.mp4 --telemetry path/to/telemetry.csv --output analyzed_video.mp4
-```
-
-**Analyze telemetry only:**
-```bash
-python -m src.main telemetry path/to/telemetry.csv --output report.html
-```
-
-**Compare two laps:**
-```bash
-python -m src.main compare lap1.csv lap2.csv --output comparison.html
-```
-
-**Start API server:**
-```bash
-python -m src.main serve --host 0.0.0.0 --port 8000
-```
-
-### API Server
-
-Start the API server:
-```bash
-uvicorn src.api:app --host 0.0.0.0 --port 8000
-```
-
-API endpoints:
-- `POST /analyze/video` - Analyze racing video with telemetry
-- `POST /telemetry/analyze` - Analyze telemetry data
-- `GET /insights/compare` - Compare two laps
-- `WS /ws/realtime` - WebSocket for real-time analysis
-
-Visit `http://localhost:8000/docs` for interactive API documentation.
-
-### Docker Deployment
-
-Build and run with Docker Compose:
-```bash
-docker-compose up -d
-```
-
-Services:
-- API: `http://localhost:8000`
-- Redis: `localhost:6379`
-- Nginx: `http://localhost:80`
-
-## Project Structure
-
-```
-DriveOS/
-├── src/
-│   ├── __init__.py
-│   ├── config.py              # Configuration management
-│   ├── video_processor.py     # Video processing utilities
-│   ├── telemetry_processor.py # Telemetry analysis
-│   ├── models.py              # ML model architectures
-│   ├── inference.py           # Inference engine
-│   ├── api.py                 # FastAPI application
-│   ├── visualization.py       # Visualization utilities
-│   └── main.py                # CLI application
-├── models/                    # Trained model weights
-├── data/                      # Sample data
-├── tests/                     # Unit tests
-├── notebooks/                 # Jupyter notebooks
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-└── README.md
-```
-
-## Telemetry Data Format
-
-CSV format with the following columns:
-- `timestamp` - Time in seconds
-- `speed` - Speed in km/h
-- `throttle` - Throttle position (0-100%)
-- `brake` - Brake pressure (0-100%)
-- `steering` - Steering angle (-100 to 100)
-- `gear` - Current gear
-- `rpm` - Engine RPM
-- `latitude` - GPS latitude (optional)
-- `longitude` - GPS longitude (optional)
-
-Example:
-```csv
-timestamp,speed,throttle,brake,steering,gear,rpm
-0.0,120.5,85.0,0.0,15.2,4,7500
-0.01,122.3,90.0,0.0,12.1,4,7800
-```
-
-## Model Training
-
-To train custom models:
-
-1. Prepare your dataset (video + telemetry pairs)
-2. Create a training notebook in `notebooks/`
-3. Use the model classes from `src/models.py`
-4. Save trained weights to `models/`
-
-Example training script coming soon!
-
-## Performance
-
-- **Video Processing**: ~30 FPS on GPU, ~5 FPS on CPU
-- **Inference Time**: 15-30ms per frame (GPU), 100-200ms (CPU)
-- **Memory Usage**: ~2GB GPU VRAM, ~4GB RAM
+**Recommendation:** Start with CPU mode to learn the software. If you plan to train frequently or need real-time analysis, NVIDIA GPU is highly recommended.
 
 ## 📄 License
 
@@ -361,101 +270,23 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 Made with ❤️ for the racing community
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
-- PyTorch and torchvision for ML frameworks
-- OpenCV for video processing
-- FastAPI for API framework
-- Plotly for visualizations
+- **PyTorch** - Deep learning framework and CUDA support
+- **OpenCV** - Computer vision and video processing
+- **NVIDIA** - CUDA and GPU acceleration technology
+- **DeepLab** - Semantic segmentation architecture
 
-## Support
-
-For issues and questions:
-- GitHub Issues: https://github.com/BrayanVillatoro/DriveOS/issues
-- Documentation: Coming soon!
-
-## Hardware Recommendations
-
-### Recording Equipment
-
-**Video Recording:**
-- **GoPro Hero 11/12 Black** - Excellent stabilization, 4K@60fps, wide FOV perfect for cockpit mounting
-- **DJI Osmo Action 4** - Great low-light performance, RockSteady stabilization
-- **Insta360 X3** - 360° capture lets you choose angle in post-production
-- **Budget option**: GoPro Hero 9/10 or phone with good stabilization
-
-**Mounting**: Windscreen suction mount or roll cage mount for stable cockpit view showing track ahead
-
-**Telemetry Recording:**
-- **RaceBox Mini S** (~$200) - 25Hz GPS, accelerometer, great for amateur racing
-- **AiM Solo 2** (~$400) - 10Hz GPS, integrates with OBD-II, LCD display
-- **VBOX Sport** (~$500) - 20Hz GPS, professional-grade accuracy
-- **RaceChrono + phone** (Free app) - Uses phone GPS/sensors, exports CSV
-- **Budget option**: Phone with RaceChrono Pro app ($10-30)
-
-**OBD-II Data Loggers:**
-- **OBDLink MX+** - Bluetooth adapter for reading ECU data (throttle, RPM, etc.)
-- **RaceCapture** - Advanced logger with GPS + OBD-II integration
-
-### Custom Raspberry Pi Solution
-
-Build your own data acquisition system for ~$225:
-
-**Hardware Components:**
-- **Raspberry Pi 5 (8GB)** (~$80) - Best performance for ML inference
-  - Alternative: Pi 4 (8GB) (~$75) if budget constrained
-- **Camera Module 3** (~$25) - 12MP, great low-light performance, autofocus
-  - Alternative: HQ Camera with wide-angle lens for better field of view
-- **GPS Module**: u-blox NEO-M9N (~$40) - 25Hz update rate for accurate positioning
-- **IMU/Accelerometer**: MPU-9250 or BMI088 (~$15) - Measure G-forces and orientation
-- **OBD-II HAT** (~$30) - Read ECU data directly from car
-- **Power Supply**: 12V to 5V converter (~$15) - Reliable car power conversion
-- **Storage**: 128GB+ microSD card (~$20) - Store video and telemetry data
-
-**Custom PCB HAT Features:**
-- Integrated GPS module
-- IMU/accelerometer
-- OBD-II interface
-- Power management circuit
-- Camera connector
-- Optional display output
-
-**Advantages:**
-- **Cost-effective**: Significantly cheaper than commercial solutions
-- **Customizable**: Full control over sampling rates and data formats
-- **Integrated**: Run DriveOS inference directly on device
-- **Real-time feedback**: Display insights while driving
-- **Open source**: No vendor lock-in, expandable with additional sensors
-- **Flexible processing**: Record locally, process post-session or real-time with lightweight models
-
-**Setup Considerations:**
-- Cooling solution required (Pi 5 runs hot in enclosed environments)
-- Clean 5V 3A+ power supply essential
-- Secure mounting with vibration dampening
-- Consider lightweight model for real-time inference, full analysis post-session on GPU
-
-### Recording Tips
-
-1. **Sync timing**: Start video and telemetry recording simultaneously for easier alignment
-2. **CSV export**: Ensure telemetry device exports to DriveOS-compatible CSV format
-3. **Frame rate**: Use 30-60fps for smooth analysis (higher = more processing time)
-4. **Storage**: 128GB+ recommended for extended track sessions
-
-**Budget Setup**: GoPro Hero 9/10 + RaceBox Mini S (~$400 total)  
-**Professional Setup**: GoPro Hero 12 + AiM Solo 2 (~$900 total)  
-**DIY Setup**: Custom Raspberry Pi system (~$225 total)
-
-## Roadmap
+## 🗺️ Roadmap
 
 - [ ] Pre-trained models for common tracks
-- [ ] Mobile app integration
-- [ ] Live streaming support
-- [ ] Multi-car comparison
-- [ ] Track database
-- [ ] Cloud deployment guides
-- [ ] Web dashboard UI
-- [ ] Raspberry Pi optimized models
-- [ ] Custom hardware PCB design files
+- [ ] Multi-car comparison and analysis
+- [ ] Track database with optimal lines
+- [ ] Enhanced real-time processing
+- [ ] Mobile companion app
+- [ ] Cloud-based training
+- [ ] Advanced telemetry integration
+- [ ] Multi-session comparison tools
 
 ---
 
