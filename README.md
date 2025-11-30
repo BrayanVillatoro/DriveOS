@@ -8,7 +8,7 @@
 
 ## 🤖 What is DriveOS?
 
-DriveOS is a **machine learning application** that trains neural networks to recognize racing lines in video footage. Unlike rule-based systems that look for specific colors or patterns, DriveOS **learns** what optimal racing lines look like by studying annotated examples.
+DriveOS is a **machine learning application** that trains neural networks to recognize racing lines in video footage. Unlike rule based systems that look for specific colors or patterns, DriveOS **learns** what optimal racing lines look like by studying annotated examples.
 
 ### How DriveOS Uses Machine Learning
 
@@ -81,11 +81,11 @@ The installer automatically handles everything - Python environment, dependencie
   - Purple line = Optimal racing line
   - Cyan overlay = Track edges
   - Green zones = Safe racing area
-  - Red highlights = Off-track areas
+  - Red highlights = Off track areas
 
 - **🎯 Professional GUI:**
-  - Easy-to-use interface
-  - Real-time statistics
+  - Easy to use interface
+  - Real time statistics
   - Progress tracking
   - Batch video processing
 
@@ -97,7 +97,7 @@ Process racing videos and overlay the optimal racing line.
 ![Analyze Video](readme_images/analyze-video.png)
 
 ### Live Preview
-Real-time racing line analysis from video files, webcams, or screen capture.
+Real time racing line analysis from video files, webcams, or screen capture.
 
 ![Live Preview](readme_images/live%20view.png)
 
@@ -113,7 +113,7 @@ Train custom AI models on your own racing footage.
 
 ## 🎮 Perfect for Sim Racing
 
-DriveOS supports **screen capture**, making it perfect for analyzing your sim racing sessions in real-time! Works with:
+DriveOS supports **screen capture**, making it perfect for analyzing your sim racing sessions in real time! Works with:
 - iRacing
 - Assetto Corsa / Assetto Corsa Competizione
 - F1 games
@@ -130,7 +130,7 @@ DriveOS supports **screen capture**, making it perfect for analyzing your sim ra
 
 ### Live Preview
 1. **"Live Preview"** tab → Choose source (Video, Webcam, or Screen Capture)
-2. Click **"Start Processing"** for real-time analysis
+2. Click **"Start Processing"** for real time analysis
 
 ### Create Training Data
 1. **"Create Training Data"** tab → Select video → **"Launch Annotation Tool"**
@@ -176,7 +176,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## ⚠️ Disclaimer
 
-**This is research software.** DriveOS is provided for educational and research purposes. The racing line suggestions are AI-generated and should not be considered as professional racing advice. Always prioritize safety when racing.
+**This is research software.** DriveOS is provided for educational and research purposes. The racing line suggestions are AI generated and should not be considered as professional racing advice. Always prioritize safety when racing.
 
 ## 🐛 Troubleshooting
 
