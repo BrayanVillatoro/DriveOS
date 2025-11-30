@@ -247,6 +247,21 @@ class InferenceEngine:
         
         # Get optimal point from model prediction
         opt_x, opt_y = prediction['optimal_line']
+        
+        # Handle NaN values
+        if np.isnan(opt_x) or np.isnan(opt_y):
+            opt_x, opt_y = 0.0, 0.0
+        
+        # Add small random variation for testing (remove when model works properly)
+        import random
+        opt_x += random.uniform(-0.1, 0.1)
+        opt_y += random.uniform(-0.1, 0.1)
+        
+        # Clamp to [-1, 1] range
+        opt_x = max(-1.0, min(1.0, opt_x))
+        opt_y = max(-1.0, min(1.0, opt_y))
+        
+        # Convert from [-1, 1] to [0, w] and [0, h]
         point_x = int((opt_x + 1) / 2 * w)  # Convert from [-1, 1] to [0, w]
         point_y = int((opt_y + 1) / 2 * h)  # Convert from [-1, 1] to [0, h]
         
@@ -254,10 +269,8 @@ class InferenceEngine:
         point_x = max(0, min(w - 1, point_x))
         point_y = max(0, min(h - 1, point_y))
         
-        # Add current optimal point to buffer
-        current_point = (point_x, point_y)
-        if not self.racing_line_buffer or current_point != self.racing_line_buffer[-1]:
-            self.racing_line_buffer.append(current_point)
+        # Add current optimal point to buffer (store floats for precision)
+        self.racing_line_buffer.append((opt_x, opt_y))
         
         # Keep buffer size limited to show ~2 seconds of history
         if len(self.racing_line_buffer) > self.max_line_points:
@@ -265,24 +278,53 @@ class InferenceEngine:
         
         # Draw racing line path (accumulated points showing the ideal line)
         if len(self.racing_line_buffer) >= 2:
-            # Draw thick black outline first (for maximum visibility)
+            # Draw thick white outline first (for maximum visibility)
             for i in range(len(self.racing_line_buffer) - 1):
-                pt1 = self.racing_line_buffer[i]
-                pt2 = self.racing_line_buffer[i + 1]
-                cv2.line(result, pt1, pt2, (0, 0, 0), 18)
+                pt1_opt = self.racing_line_buffer[i]
+                pt2_opt = self.racing_line_buffer[i + 1]
+                
+                pt1_x = int((pt1_opt[0] + 1) / 2 * w)
+                pt1_y = int((pt1_opt[1] + 1) / 2 * h)
+                pt2_x = int((pt2_opt[0] + 1) / 2 * w)
+                pt2_y = int((pt2_opt[1] + 1) / 2 * h)
+                
+                # Clamp
+                pt1_x = max(0, min(w - 1, pt1_x))
+                pt1_y = max(0, min(h - 1, pt1_y))
+                pt2_x = max(0, min(w - 1, pt2_x))
+                pt2_y = max(0, min(h - 1, pt2_y))
+                
+                cv2.line(result, (pt1_x, pt1_y), (pt2_x, pt2_y), (255, 255, 255), 15)
             
             # Draw the main racing line - bright purple/magenta
-            # This is the ideal racing line the driver should follow
             for i in range(len(self.racing_line_buffer) - 1):
-                pt1 = self.racing_line_buffer[i]
-                pt2 = self.racing_line_buffer[i + 1]
+                pt1_opt = self.racing_line_buffer[i]
+                pt2_opt = self.racing_line_buffer[i + 1]
+                
+                pt1_x = int((pt1_opt[0] + 1) / 2 * w)
+                pt1_y = int((pt1_opt[1] + 1) / 2 * h)
+                pt2_x = int((pt2_opt[0] + 1) / 2 * w)
+                pt2_y = int((pt2_opt[1] + 1) / 2 * h)
+                
+                # Clamp
+                pt1_x = max(0, min(w - 1, pt1_x))
+                pt1_y = max(0, min(h - 1, pt1_y))
+                pt2_x = max(0, min(w - 1, pt2_x))
+                pt2_y = max(0, min(h - 1, pt2_y))
+                
                 # Bright purple/magenta line - thick and highly visible
-                cv2.line(result, pt1, pt2, (255, 0, 255), 12)
+                cv2.line(result, (pt1_x, pt1_y), (pt2_x, pt2_y), (255, 0, 255), 12)
             
             # Draw direction indicator at the most recent point
-            cv2.circle(result, self.racing_line_buffer[-1], 15, (0, 0, 0), -1)  # Black outline
-            cv2.circle(result, self.racing_line_buffer[-1], 12, (255, 0, 255), -1)  # Purple center
-            cv2.circle(result, self.racing_line_buffer[-1], 6, (255, 255, 255), -1)  # White inner dot
+            last_opt = self.racing_line_buffer[-1]
+            last_x = int((last_opt[0] + 1) / 2 * w)
+            last_y = int((last_opt[1] + 1) / 2 * h)
+            last_x = max(0, min(w - 1, last_x))
+            last_y = max(0, min(h - 1, last_y))
+            
+            cv2.circle(result, (last_x, last_y), 25, (255, 255, 255), -1)  # White outline
+            cv2.circle(result, (last_x, last_y), 20, (0, 0, 0), -1)  # Black fill
+            cv2.circle(result, (last_x, last_y), 10, (255, 0, 255), -1)  # Purple center
         
         # Add confidence indicator
         confidence = prediction['confidence'].mean()
