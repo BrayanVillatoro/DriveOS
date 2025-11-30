@@ -309,10 +309,48 @@ class InferenceEngine:
         if len(self.racing_line_buffer) > max_buffer_size:
             self.racing_line_buffer = self.racing_line_buffer[-max_buffer_size:]
 
-        # Draw the racing line as a continuous polyline
-        if len(self.racing_line_buffer) > 1:
-            pts = np.array(self.racing_line_buffer, np.int32).reshape((-1, 1, 2))
-            cv2.polylines(result, [pts], isClosed=False, color=(0, 255, 0), thickness=3)
+        # Apply moving average smoothing to buffer points for a continuous racing line
+        smoothed_buffer = []
+        window_size = 5
+        for i in range(len(self.racing_line_buffer)):
+            start = max(0, i - window_size + 1)
+            window = self.racing_line_buffer[start:i+1]
+            avg_x = int(np.mean([pt[0] for pt in window]))
+            avg_y = int(np.mean([pt[1] for pt in window]))
+            smoothed_buffer.append((avg_x, avg_y))
+
+        # Further increase smoothing window
+        window_size = 8
+        smoothed_buffer = []
+        for i in range(len(self.racing_line_buffer)):
+            start = max(0, i - window_size + 1)
+            window = self.racing_line_buffer[start:i+1]
+            avg_x = int(np.mean([pt[0] for pt in window]))
+            avg_y = int(np.mean([pt[1] for pt in window]))
+            smoothed_buffer.append((avg_x, avg_y))
+
+        # Spline interpolation for even smoother curve
+        try:
+            from scipy.interpolate import CubicSpline
+            if len(smoothed_buffer) > 3:
+                xs = [pt[0] for pt in smoothed_buffer]
+                ys = [pt[1] for pt in smoothed_buffer]
+                t = np.arange(len(smoothed_buffer))
+                cs_x = CubicSpline(t, xs)
+                cs_y = CubicSpline(t, ys)
+                t_new = np.linspace(0, len(smoothed_buffer)-1, 50)
+                interp_pts = np.array([(int(cs_x(ti)), int(cs_y(ti))) for ti in t_new], np.int32).reshape((-1, 1, 2))
+                cv2.polylines(result, [interp_pts], isClosed=False, color=(0, 255, 0), thickness=4)
+            else:
+                # Fallback to polyline if not enough points
+                if len(smoothed_buffer) > 1:
+                    pts = np.array(smoothed_buffer, np.int32).reshape((-1, 1, 2))
+                    cv2.polylines(result, [pts], isClosed=False, color=(0, 255, 0), thickness=3)
+        except ImportError:
+            # Fallback to polyline if scipy not available
+            if len(smoothed_buffer) > 1:
+                pts = np.array(smoothed_buffer, np.int32).reshape((-1, 1, 2))
+                cv2.polylines(result, [pts], isClosed=False, color=(0, 255, 0), thickness=3)
         
         # Draw direction indicator at the most recent point
         if len(self.racing_line_buffer) > 0:
