@@ -353,39 +353,44 @@ class DriveOSGUI:
                                    justify='center')
         instruction_text.pack(padx=20, pady=(0, 15))
         
-        # File selection card
-        file_frame = ttk.LabelFrame(self.upload_tab, text="Step 1: Select Racing Video", padding=25)
-        file_frame.pack(fill='x', padx=30, pady=10)
+        # Top row container for Steps 1 and 2
+        top_row = tk.Frame(self.upload_tab, bg=self.colors['card'])
+        top_row.pack(fill='x', padx=30, pady=10)
         
-        self.file_path_var = tk.StringVar(value="No video selected - click 'Select Video' button")
+        # File selection card (LEFT)
+        file_frame = ttk.LabelFrame(top_row, text="Step 1: Select Racing Video", padding=15)
+        file_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
+        
+        self.file_path_var = tk.StringVar(value="No video selected")
         
         path_display = tk.Label(file_frame, textvariable=self.file_path_var,
-                               font=('Segoe UI', 10),
+                               font=('Segoe UI', 9),
                                fg=self.colors['fg'],
                                bg=self.colors['card'],
                                anchor='w',
-                               wraplength=800)
-        path_display.pack(fill='x', pady=(0, 15))
+                               wraplength=400)
+        path_display.pack(fill='x', pady=(0, 10))
         
         ttk.Button(file_frame, text="📁 Select Video",
                   command=self.browse_video,
                   style='Action.TButton').pack()
         
-        # Output settings
-        output_frame = ttk.LabelFrame(self.upload_tab, text="Step 2: Choose Output Location", padding=25)
-        output_frame.pack(fill='x', padx=30, pady=10)
+        # Output settings (RIGHT)
+        output_frame = ttk.LabelFrame(top_row, text="Step 2: Output Location", padding=15)
+        output_frame.pack(side='left', fill='both', expand=True, padx=(5, 0))
         
         self.output_dir_var = tk.StringVar(value=str(Path.home() / "Videos"))
         
         output_display = tk.Label(output_frame,
-                                 text=f"Analyzed videos will be saved to: {self.output_dir_var.get()}",
-                                 font=('Segoe UI', 10),
+                                 text=f"Save to:\n{self.output_dir_var.get()}",
+                                 font=('Segoe UI', 9),
                                  fg=self.colors['fg'],
                                  bg=self.colors['card'],
-                                 anchor='w')
-        output_display.pack(fill='x', pady=(0, 15))
+                                 anchor='w',
+                                 wraplength=400)
+        output_display.pack(fill='x', pady=(0, 10))
         
-        ttk.Button(output_frame, text="📂 Change Output Folder",
+        ttk.Button(output_frame, text="📂 Change Folder",
                   command=self.browse_output,
                   style='Action.TButton').pack()
         
@@ -453,29 +458,83 @@ class DriveOSGUI:
                                           state='disabled')
         self.analyze_stop_btn.pack(side='left', padx=5)
         
-        # Progress
+        # Progress - Enhanced with more details
         progress_frame = ttk.LabelFrame(self.upload_tab, text="Processing Status", padding=20)
         progress_frame.pack(fill='both', expand=True, padx=30, pady=(0, 20))
         
+        # Main progress bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var,
                                            maximum=100, style='Analyze.Horizontal.TProgressbar')
-        self.progress_bar.pack(fill='x', pady=15)
+        self.progress_bar.pack(fill='x', pady=(10, 5))
         
+        # Status message
         self.progress_label = tk.Label(progress_frame, 
                                       text="Ready - Select a video to begin",
-                                      font=('Segoe UI', 11),
+                                      font=('Segoe UI', 11, 'bold'),
                                       fg=self.colors['fg'],
                                       bg=self.colors['card'])
-        self.progress_label.pack()
+        self.progress_label.pack(pady=5)
         
-        # Model info label
-        self.model_info_label = tk.Label(progress_frame,
-                                        text="📦 Model: models/racing_line_model.pth | 🖥️ Device: Not started",
+        # Detailed status grid
+        status_grid = tk.Frame(progress_frame, bg=self.colors['card'])
+        status_grid.pack(fill='x', pady=10)
+        
+        # Left column
+        left_col = tk.Frame(status_grid, bg=self.colors['card'])
+        left_col.pack(side='left', fill='both', expand=True, padx=10)
+        
+        self.frame_status_label = tk.Label(left_col,
+                                          text="📊 Frames: --/--",
+                                          font=('Segoe UI', 10),
+                                          fg=self.colors['fg'],
+                                          bg=self.colors['card'],
+                                          anchor='w')
+        self.frame_status_label.pack(fill='x', pady=2)
+        
+        self.fps_status_label = tk.Label(left_col,
+                                         text="⚡ Processing Speed: -- FPS",
+                                         font=('Segoe UI', 10),
+                                         fg=self.colors['fg'],
+                                         bg=self.colors['card'],
+                                         anchor='w')
+        self.fps_status_label.pack(fill='x', pady=2)
+        
+        self.time_status_label = tk.Label(left_col,
+                                          text="⏱️ Time: --:-- / Est. --:--",
+                                          font=('Segoe UI', 10),
+                                          fg=self.colors['fg'],
+                                          bg=self.colors['card'],
+                                          anchor='w')
+        self.time_status_label.pack(fill='x', pady=2)
+        
+        # Right column
+        right_col = tk.Frame(status_grid, bg=self.colors['card'])
+        right_col.pack(side='left', fill='both', expand=True, padx=10)
+        
+        self.model_info_label = tk.Label(right_col,
+                                        text="📦 Model: models/racing_line_model.pth",
                                         font=('Segoe UI', 10),
                                         fg=self.colors['accent'],
-                                        bg=self.colors['card'])
-        self.model_info_label.pack(pady=(10, 0))
+                                        bg=self.colors['card'],
+                                        anchor='w')
+        self.model_info_label.pack(fill='x', pady=2)
+        
+        self.device_status_label = tk.Label(right_col,
+                                           text="🖥️ Device: Not started",
+                                           font=('Segoe UI', 10),
+                                           fg=self.colors['accent'],
+                                           bg=self.colors['card'],
+                                           anchor='w')
+        self.device_status_label.pack(fill='x', pady=2)
+        
+        self.inference_status_label = tk.Label(right_col,
+                                              text="🧠 Inference: -- ms/frame",
+                                              font=('Segoe UI', 10),
+                                              fg=self.colors['fg'],
+                                              bg=self.colors['card'],
+                                              anchor='w')
+        self.inference_status_label.pack(fill='x', pady=2)
 
         
     def create_training_view(self):
@@ -1153,8 +1212,11 @@ Right Click        - Undo last point
             
             processor = BatchProcessor(model_path, device=actual_device)
             
-            self.model_info_label.config(text=f"📦 Model: {model_path} | 🖥️ Device: {actual_device.upper()}")
-            self.progress_label.config(text=f"🚀 Processing with {actual_device.upper()}...")
+            # Get actual device being used (may differ from requested due to compatibility)
+            actual_device_used = str(processor.engine.device).replace('cuda:0', 'cuda')
+            
+            self.model_info_label.config(text=f"📦 Model: {model_path} | 🖥️ Device: {actual_device_used.upper()}")
+            self.progress_label.config(text=f"🚀 Processing with {actual_device_used.upper()}...")
             self.root.update()
             
             # Get total frames
@@ -1163,11 +1225,42 @@ Right Click        - Undo last point
             cap.release()
             
             self.progress_label.config(text=f"🔄 Analyzing {total_frames} frames with AI...")
-            self.progress_var.set(25)
+            self.progress_var.set(0)
             
             # Process with progress updates
+            def update_progress(frame_num, total, fps, inference_ms):
+                """Update GUI with processing progress"""
+                try:
+                    progress = (frame_num / total * 100) if total > 0 else 0
+                    self.progress_var.set(progress)
+                    
+                    # Update status labels
+                    self.frame_status_label.config(text=f"📊 Frames: {frame_num}/{total}")
+                    self.fps_status_label.config(text=f"⚡ Processing Speed: {fps:.1f} FPS")
+                    self.inference_status_label.config(text=f"🧠 Inference: {inference_ms:.1f} ms/frame")
+                    
+                    # Calculate time remaining
+                    if fps > 0:
+                        remaining_frames = total - frame_num
+                        remaining_seconds = remaining_frames / fps
+                        remaining_mins = int(remaining_seconds // 60)
+                        remaining_secs = int(remaining_seconds % 60)
+                        
+                        elapsed_seconds = frame_num / fps
+                        elapsed_mins = int(elapsed_seconds // 60)
+                        elapsed_secs = int(elapsed_seconds % 60)
+                        
+                        self.time_status_label.config(
+                            text=f"⏱️ Time: {elapsed_mins:02d}:{elapsed_secs:02d} / Est. {remaining_mins:02d}:{remaining_secs:02d} remaining"
+                        )
+                    
+                    self.root.update_idletasks()
+                except:
+                    pass  # Ignore errors during GUI updates
+            
             stats = processor.process_video(video_path, output_path, 
-                                           stop_callback=lambda: self.stop_batch_analysis)
+                                           stop_callback=lambda: self.stop_batch_analysis,
+                                           progress_callback=update_progress)
             
             # Check if stopped or completed
             if self.stop_batch_analysis:
@@ -1466,7 +1559,7 @@ Right Click        - Undo last point
             if str(scripts_dir) not in sys.path:
                 sys.path.insert(0, str(scripts_dir))
             
-            from auto_label_track import AutoTrackLabeler
+            from auto_label_track import AutoTrackLabeler # type: ignore
             
             # Get total frames for progress calculation
             cap = cv2.VideoCapture(video_path)

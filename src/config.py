@@ -69,10 +69,24 @@ class Config:
         # Use CUDA if available (for compatible GPUs)
         if torch.cuda.is_available():
             try:
-                # Test if GPU is actually usable
-                test = torch.zeros(1).cuda()
+                # Check if RTX 50 series (sm_120)
+                gpu_name = torch.cuda.get_device_name(0)
+                if "RTX 50" in gpu_name or "RTX50" in gpu_name:
+                    print(f"⚠️  {gpu_name} detected (CUDA capability 12.0)")
+                    print("   RTX 50 series support requires PyTorch 2.11+ (not yet released)")
+                    print("   Using CPU mode for now - GPU will be 10-20x faster once supported")
+                    print("   Check for updates: pip install --upgrade torch")
+                    return torch.device("cpu")
+                
+                # Test if GPU actually works with kernel execution
+                test = torch.zeros(10, 10).cuda()
+                result = test @ test  # Test matrix multiplication (kernel execution)
+                del test, result
                 return torch.device("cuda")
-            except:
+            except Exception as e:
+                # GPU detected but not compatible
+                print(f"⚠️  GPU detected but not compatible: {e}")
+                print("   Falling back to CPU mode")
                 pass
         
         # Use CPU for maximum compatibility (optimized with 16 threads)

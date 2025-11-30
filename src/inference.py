@@ -55,16 +55,43 @@ class InferenceEngine:
             except Exception as e:
                 logger.warning(f"Could not load model: {e}. Using untrained model.")
         
-        self.model.to(self.device)
-        self.model.eval()
+        # Try to use GPU, fallback to CPU if incompatible
+        try:
+            self.model.to(self.device)
+            self.model.eval()
+            
+            # Test if GPU actually works with a simple forward pass
+            if self.device.type == 'cuda':
+                gpu_name = torch.cuda.get_device_name(0)
+                # Check for RTX 50 series - skip test as we know it won't work
+                if "RTX 50" in gpu_name or "RTX50" in gpu_name:
+                    logger.warning(f"⚠️  {gpu_name} detected but not yet supported by PyTorch")
+                    logger.warning("   Falling back to CPU mode (GPU will be 10-20x faster once supported)")
+                    self.device = torch.device("cpu")
+                    self.model.to(self.device)
+                    self.model.eval()
+                else:
+                    # Test GPU with forward pass
+                    test_img = torch.randn(1, 3, 320, 320).to(self.device)
+                    test_tel = torch.randn(1, 100, 5).to(self.device)
+                    with torch.no_grad():
+                        _ = self.model(test_img, test_tel)
+                    del test_img, test_tel
+                    logger.info(f"✓ Running on GPU: {gpu_name}")
+        except RuntimeError as e:
+            if "no kernel image is available" in str(e) or "CUDA" in str(e):
+                logger.warning(f"⚠️  GPU incompatible, falling back to CPU")
+                self.device = torch.device("cpu")
+                self.model.to(self.device)
+                self.model.eval()
+            else:
+                raise
         
         # Enable CPU optimizations
         if self.device.type == 'cpu':
             # Use optimized CPU inference with all available threads
             torch.set_num_threads(16)
             logger.info("✓ Running on CPU with 16-thread optimization")
-        else:
-            logger.info(f"✓ Running on GPU: {self.device}")
         
         # Racing line buffer for visualization (stores recent points)
         self.racing_line_buffer = []
@@ -218,55 +245,42 @@ class InferenceEngine:
         # Blend overlay with original frame
         result = cv2.addWeighted(result, 0.75, overlay, 0.25, 0)
         
-        # Extract racing line from segmentation (class 1 = racing line)
-        racing_line_mask = (seg_map == 1).astype(np.uint8) * 255
+        # Get optimal point from model prediction
+        opt_x, opt_y = prediction['optimal_line']
+        point_x = int((opt_x + 1) / 2 * w)  # Convert from [-1, 1] to [0, w]
+        point_y = int((opt_y + 1) / 2 * h)  # Convert from [-1, 1] to [0, h]
         
-        # Find contours of the racing line
-        contours, _ = cv2.findContours(racing_line_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Clamp to frame boundaries
+        point_x = max(0, min(w - 1, point_x))
+        point_y = max(0, min(h - 1, point_y))
         
-        # Draw racing line based on segmentation
-        if contours:
-            # Get the largest contour (should be the racing line)
-            racing_line_contour = max(contours, key=cv2.contourArea)
-            
-            # Smooth the contour
-            epsilon = 0.01 * cv2.arcLength(racing_line_contour, True)
-            smoothed_contour = cv2.approxPolyDP(racing_line_contour, epsilon, True)
-            
+        # Add current optimal point to buffer
+        self.racing_line_buffer.append((point_x, point_y))
+        
+        # Keep buffer size limited to show ~2 seconds of history
+        if len(self.racing_line_buffer) > self.max_line_points:
+            self.racing_line_buffer.pop(0)
+        
+        # Draw racing line path (accumulated points showing the ideal line)
+        if len(self.racing_line_buffer) >= 2:
             # Draw thick black outline first (for maximum visibility)
-            cv2.drawContours(result, [smoothed_contour], -1, (0, 0, 0), 18)
+            for i in range(len(self.racing_line_buffer) - 1):
+                pt1 = self.racing_line_buffer[i]
+                pt2 = self.racing_line_buffer[i + 1]
+                cv2.line(result, pt1, pt2, (0, 0, 0), 18)
             
-            # Draw the main racing line - bright and consistent
-            # Bright purple/magenta line - thick and highly visible
-            # This is the racing line the driver should follow
-            cv2.drawContours(result, [smoothed_contour], -1, (255, 0, 255), 12)
+            # Draw the main racing line - bright purple/magenta
+            # This is the ideal racing line the driver should follow
+            for i in range(len(self.racing_line_buffer) - 1):
+                pt1 = self.racing_line_buffer[i]
+                pt2 = self.racing_line_buffer[i + 1]
+                # Bright purple/magenta line - thick and highly visible
+                cv2.line(result, pt1, pt2, (255, 0, 255), 12)
             
-            # Find and draw the centerline through the racing line
-            # Get moments to find centroid
-            M = cv2.moments(racing_line_contour)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                
-                # Add current optimal point to buffer for trajectory tracking
-                self.racing_line_buffer.append((cx, cy))
-                
-                # Keep buffer size limited
-                if len(self.racing_line_buffer) > self.max_line_points:
-                    self.racing_line_buffer.pop(0)
-                
-                # Draw trajectory path over time (shows where optimal point moved)
-                if len(self.racing_line_buffer) >= 2:
-                    for i in range(len(self.racing_line_buffer) - 1):
-                        pt1 = self.racing_line_buffer[i]
-                        pt2 = self.racing_line_buffer[i + 1]
-                        # Cyan line for trajectory history
-                        cv2.line(result, pt1, pt2, (255, 255, 0), 6)
-                
-                # Draw current optimal point indicator
-                cv2.circle(result, (cx, cy), 15, (0, 0, 0), -1)  # Black outline
-                cv2.circle(result, (cx, cy), 12, (255, 0, 255), -1)  # Purple center
-                cv2.circle(result, (cx, cy), 6, (255, 255, 255), -1)  # White inner dot
+            # Draw direction indicator at the most recent point
+            cv2.circle(result, self.racing_line_buffer[-1], 15, (0, 0, 0), -1)  # Black outline
+            cv2.circle(result, self.racing_line_buffer[-1], 12, (255, 0, 255), -1)  # Purple center
+            cv2.circle(result, self.racing_line_buffer[-1], 6, (255, 255, 255), -1)  # White inner dot
         
         # Add confidence indicator
         confidence = prediction['confidence'].mean()
@@ -276,6 +290,12 @@ class InferenceEngine:
         # Add inference time
         cv2.putText(result, f"Inference: {prediction['inference_time_ms']:.1f}ms", 
                    (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        # Debug: Show predicted coordinates and buffer size
+        cv2.putText(result, f"Line Point: ({opt_x:.2f}, {opt_y:.2f}) -> ({point_x}, {point_y})", 
+                   (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        cv2.putText(result, f"Buffer: {len(self.racing_line_buffer)} points", 
+                   (10, 145), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         
         return result
 
@@ -389,7 +409,8 @@ class BatchProcessor:
     
     def process_video(self, video_path: str, output_path: str,
                      telemetry_path: Optional[str] = None,
-                     stop_callback: Optional[callable] = None) -> Dict:
+                     stop_callback: Optional[callable] = None,
+                     progress_callback: Optional[callable] = None) -> Dict:
         """
         Process entire video file
         
@@ -398,6 +419,7 @@ class BatchProcessor:
             output_path: Output video path
             telemetry_path: Optional telemetry CSV path
             stop_callback: Optional callback function that returns True to stop processing
+            progress_callback: Optional callback(frame_num, total_frames, fps, inference_time)
             
         Returns:
             Processing statistics
@@ -429,13 +451,17 @@ class BatchProcessor:
         }
         
         with VideoProcessor(video_path) as vp:
-            # Get frame size
+            # Get frame size and total frames
             ret, first_frame = vp.cap.read()
             vp.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             h, w = first_frame.shape[:2]
+            total_frames = int(vp.cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
             # Create video writer
             from .video_processor import VideoWriter
+            import time as time_module
+            start_time = time_module.time()
+            
             with VideoWriter(output_path, vp.target_fps, (w, h)) as writer:
                 inference_times = []
                 
@@ -461,8 +487,17 @@ class BatchProcessor:
                     stats['total_frames'] += 1
                     stats['predictions'].append(prediction)
                     
+                    # Calculate processing FPS
+                    elapsed = time_module.time() - start_time
+                    processing_fps = stats['total_frames'] / elapsed if elapsed > 0 else 0
+                    
+                    # Call progress callback
+                    if progress_callback and frame_num % 5 == 0:  # Update every 5 frames
+                        progress_callback(frame_num, total_frames, processing_fps, 
+                                        prediction['inference_time_ms'])
+                    
                     if frame_num % 30 == 0:
-                        logger.info(f"Processed frame {frame_num}")
+                        logger.info(f"Processed frame {frame_num}/{total_frames} ({processing_fps:.1f} FPS)")
         
         stats['avg_inference_time'] = np.mean(inference_times)
         logger.info(f"Processing complete. Average inference time: {stats['avg_inference_time']:.2f}ms")

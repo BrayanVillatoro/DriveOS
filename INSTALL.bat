@@ -19,33 +19,48 @@ echo.
 echo Installation log will be saved to: %LOGFILE%
 echo.
 
-REM Check if Python is installed
+REM Check if Python is installed - prefer Python 3.11 for best compatibility
 echo [CHECK] Checking for Python installation... >> "%LOGFILE%"
-python --version >> "%LOGFILE%" 2>&1
-if errorlevel 1 (
-    color 0C
-    echo ERROR: Python is not installed or not in PATH! >> "%LOGFILE%"
-    echo ERROR: Python is not installed or not in PATH!
-    echo.
-    echo Please install Python 3.9, 3.10, or 3.11 from:
-    echo https://www.python.org/downloads/
-    echo.
-    echo Make sure to check "Add Python to PATH" during installation!
-    echo.
-    echo Check install_log.txt for details.
-    echo.
-    pause
-    exit /b 1
+set PYTHON_CMD=python
+py -3.11 --version >nul 2>&1
+if not errorlevel 1 (
+    set PYTHON_CMD=py -3.11
+    echo Found Python 3.11 - using for best compatibility >> "%LOGFILE%"
+) else (
+    py -3.12 --version >nul 2>&1
+    if not errorlevel 1 (
+        set PYTHON_CMD=py -3.12
+        echo Found Python 3.12 >> "%LOGFILE%"
+    ) else (
+        python --version >> "%LOGFILE%" 2>&1
+        if errorlevel 1 (
+            color 0C
+            echo ERROR: Python is not installed or not in PATH! >> "%LOGFILE%"
+            echo ERROR: Python is not installed or not in PATH!
+            echo.
+            echo Please install Python 3.9-3.12 from:
+            echo https://www.python.org/downloads/
+            echo.
+            echo Make sure to check "Add Python to PATH" during installation!
+            echo.
+            echo Check install_log.txt for details.
+            echo.
+            pause
+            exit /b 1
+        )
+    )
 )
+%PYTHON_CMD% --version >> "%LOGFILE%"
 
 echo [1/6] Checking Python version...
 echo [STEP 1] Checking Python version... >> "%LOGFILE%"
-python -c "import sys; v=sys.version_info; exit(0 if (v.major == 3 and 9 <= v.minor <= 11) else 1)" >> "%LOGFILE%" 2>&1
+%PYTHON_CMD% -c "import sys; v=sys.version_info; exit(0 if (v.major == 3 and 9 <= v.minor <= 12) else 1)" >> "%LOGFILE%" 2>&1
 if errorlevel 1 (
     color 0E
-    echo WARNING: Python 3.9-3.11 required! >> "%LOGFILE%"
-    echo WARNING: Python 3.9-3.11 required!
-    echo Your version may not be compatible.
+    echo WARNING: Python 3.9-3.12 required! >> "%LOGFILE%"
+    echo WARNING: Python 3.9-3.12 required!
+    echo Your version may not be compatible with PyTorch.
+    %PYTHON_CMD% -c "import sys; print(f'Detected: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"
     echo.
     set /p continue="Continue anyway? (y/n): "
     if /i not "%continue%"=="y" (
@@ -60,7 +75,7 @@ echo. >> "%LOGFILE%"
 echo [2/6] Creating virtual environment...
 echo [STEP 2] Creating virtual environment... >> "%LOGFILE%"
 if not exist .venv (
-    python -m venv .venv >> "%LOGFILE%" 2>&1
+    %PYTHON_CMD% -m venv .venv >> "%LOGFILE%" 2>&1
     if errorlevel 1 (
         echo ERROR: Failed to create virtual environment >> "%LOGFILE%"
         echo ERROR: Failed to create virtual environment
@@ -84,15 +99,15 @@ echo [4/6] Detecting hardware and installing PyTorch...
 echo [STEP 4] Detecting hardware and installing PyTorch... >> "%LOGFILE%"
 echo.
 
-REM Check for NVIDIA GPU
-.venv\Scripts\python.exe -c "import subprocess; result = subprocess.run(['wmic', 'path', 'win32_VideoController', 'get', 'name'], capture_output=True, text=True); exit(0 if 'NVIDIA' in result.stdout else 1)" >> "%LOGFILE%" 2>&1
+REM Check for NVIDIA GPU using PowerShell (works on all Windows versions)
+powershell -Command "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name" | findstr /i "NVIDIA" > nul 2>&1
 
 if errorlevel 1 (
     echo    No NVIDIA GPU detected - Installing CPU version
     echo No NVIDIA GPU detected - Installing CPU version >> "%LOGFILE%"
     echo    (Training will be slower but compatible with all systems)
     echo.
-    .venv\Scripts\python.exe -m pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu --quiet >> "%LOGFILE%" 2>&1
+    .venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet >> "%LOGFILE%" 2>&1
 ) else (
     echo    NVIDIA GPU detected!
     echo NVIDIA GPU detected >> "%LOGFILE%"
@@ -100,7 +115,7 @@ if errorlevel 1 (
     echo    Choose PyTorch version:
     echo    1. CUDA 11.8 (Recommended for GTX/RTX 20/30 series)
     echo    2. CUDA 12.1 (For RTX 40 series)
-    echo    3. PyTorch Nightly (For RTX 50 series with CUDA 12.8+)
+    echo    3. PyTorch Nightly with CUDA 12.6 (For RTX 50 series - experimental, uses CPU fallback)
     echo    4. CPU only (Slower but always compatible)
     echo.
     set /p gpu_choice="Enter choice (1-4) [default: 1]: "
@@ -116,14 +131,20 @@ if errorlevel 1 (
         echo Installing PyTorch with CUDA 12.1 >> "%LOGFILE%"
         .venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --quiet >> "%LOGFILE%" 2>&1
     ) else if "%gpu_choice%"=="3" (
-        echo    Installing PyTorch Nightly (RTX 50 series support)...
-        echo Installing PyTorch Nightly >> "%LOGFILE%"
-        echo    Note: Nightly builds may have experimental features
-        .venv\Scripts\python.exe -m pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu124 --quiet >> "%LOGFILE%" 2>&1
+        echo    Installing PyTorch Nightly with CUDA 12.6 ^(RTX 50 series^)...
+        echo    WARNING: RTX 50 series not fully supported yet - will use CPU fallback
+        echo Installing PyTorch Nightly CUDA 12.6 >> "%LOGFILE%"
+        echo    Note: This is a large download and may take 5-10 minutes...
+        .venv\Scripts\python.exe -m pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126 >> "%LOGFILE%" 2>&1
+        if errorlevel 1 (
+            echo    Nightly build failed, trying stable CUDA 12.1...
+            echo Nightly build failed, falling back to CUDA 12.1 stable >> "%LOGFILE%"
+            .venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121 >> "%LOGFILE%" 2>&1
+        )
     ) else (
         echo    Installing CPU version...
         echo Installing CPU version >> "%LOGFILE%"
-        .venv\Scripts\python.exe -m pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu --quiet >> "%LOGFILE%" 2>&1
+        .venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu --quiet >> "%LOGFILE%" 2>&1
     )
 )
 echo.
