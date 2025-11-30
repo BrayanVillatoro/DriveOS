@@ -42,6 +42,7 @@ python-dotenv>=1.0.0
 # Utilities
 tqdm>=4.66.0
 pyyaml>=6.0.1
+mss>=9.0.0
 
 # Optional: TensorFlow (comment out if not using)
 # tensorflow>=2.14.0
