@@ -57,6 +57,9 @@ class Config:
     USE_GPU: bool = os.getenv("USE_GPU", "true").lower() == "true"
     NUM_WORKERS: int = int(os.getenv("NUM_WORKERS", "4"))
     
+    # Directory Settings
+    LOGS_DIR: Path = LOGS_DIR
+    
     @classmethod
     def get_device(cls):
         """Get the computing device (GPU or CPU) - uses CPU for maximum compatibility"""
