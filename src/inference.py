@@ -291,9 +291,17 @@ class InferenceEngine:
         point_y = max(0, min(h - 1, point_y))
         
         # Only add valid, on-track points with high confidence to buffer
-        confidence_threshold = 0.7
+        confidence_threshold = 0.5  # Lowered threshold for debugging
         track_mask = (prediction['segmentation'] == 0)
-        if prediction['confidence'] > confidence_threshold and track_mask[point_y, point_x]:
+        conf_val = float(prediction['confidence']) if np.isscalar(prediction['confidence']) else float(np.mean(prediction['confidence']))
+        mask_h, mask_w = track_mask.shape
+        scaled_x = int(point_x * mask_w / w)
+        scaled_y = int(point_y * mask_h / h)
+        scaled_x = max(0, min(mask_w - 1, scaled_x))
+        scaled_y = max(0, min(mask_h - 1, scaled_y))
+        mask_value = int(track_mask[scaled_y, scaled_x])
+        logger.info(f"Debug: Confidence={conf_val:.2f}, Mask Value={mask_value}, Scaled Point=({scaled_x},{scaled_y}), Frame Point=({point_x},{point_y})")
+        if conf_val > confidence_threshold and mask_value == 1:
             self.racing_line_buffer.append((point_x, point_y))
 
         # Limit buffer size for smoother visualization
@@ -307,15 +315,15 @@ class InferenceEngine:
             cv2.polylines(result, [pts], isClosed=False, color=(0, 255, 0), thickness=3)
         
         # Draw direction indicator at the most recent point
-        last_opt = self.racing_line_buffer[-1]
-        last_x = int((last_opt[0] + 1) / 2 * w)
-        last_y = int((last_opt[1] + 1) / 2 * h)
-        last_x = max(0, min(w - 1, last_x))
-        last_y = max(0, min(h - 1, last_y))
-        
-        cv2.circle(result, (last_x, last_y), 25, (255, 255, 255), -1)  # White outline
-        cv2.circle(result, (last_x, last_y), 20, (0, 0, 0), -1)  # Black fill
-        cv2.circle(result, (last_x, last_y), 10, (255, 0, 255), -1)  # Purple center
+        if len(self.racing_line_buffer) > 0:
+            last_opt = self.racing_line_buffer[-1]
+            last_x = int(last_opt[0])
+            last_y = int(last_opt[1])
+            last_x = max(0, min(w - 1, last_x))
+            last_y = max(0, min(h - 1, last_y))
+            cv2.circle(result, (last_x, last_y), 25, (255, 255, 255), -1)  # White outline
+            cv2.circle(result, (last_x, last_y), 20, (0, 0, 0), -1)  # Black fill
+            cv2.circle(result, (last_x, last_y), 10, (255, 0, 255), -1)  # Purple center
         
         # Add confidence indicator
         confidence = prediction['confidence'].mean()
