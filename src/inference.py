@@ -218,37 +218,55 @@ class InferenceEngine:
         # Blend overlay with original frame
         result = cv2.addWeighted(result, 0.75, overlay, 0.25, 0)
         
-        # Add current optimal point to buffer
-        opt_x, opt_y = prediction['optimal_line']
-        point_x = int((opt_x + 1) / 2 * w)  # Convert from [-1, 1] to [0, w]
-        point_y = int((opt_y + 1) / 2 * h)
-        self.racing_line_buffer.append((point_x, point_y))
+        # Extract racing line from segmentation (class 1 = racing line)
+        racing_line_mask = (seg_map == 1).astype(np.uint8) * 255
         
-        # Keep buffer size limited
-        if len(self.racing_line_buffer) > self.max_line_points:
-            self.racing_line_buffer.pop(0)
+        # Find contours of the racing line
+        contours, _ = cv2.findContours(racing_line_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Draw racing line path that driver should follow
-        if len(self.racing_line_buffer) >= 2:
+        # Draw racing line based on segmentation
+        if contours:
+            # Get the largest contour (should be the racing line)
+            racing_line_contour = max(contours, key=cv2.contourArea)
+            
+            # Smooth the contour
+            epsilon = 0.01 * cv2.arcLength(racing_line_contour, True)
+            smoothed_contour = cv2.approxPolyDP(racing_line_contour, epsilon, True)
+            
             # Draw thick black outline first (for maximum visibility)
-            for i in range(len(self.racing_line_buffer) - 1):
-                pt1 = self.racing_line_buffer[i]
-                pt2 = self.racing_line_buffer[i + 1]
-                cv2.line(result, pt1, pt2, (0, 0, 0), 18)
+            cv2.drawContours(result, [smoothed_contour], -1, (0, 0, 0), 18)
             
             # Draw the main racing line - bright and consistent
-            for i in range(len(self.racing_line_buffer) - 1):
-                pt1 = self.racing_line_buffer[i]
-                pt2 = self.racing_line_buffer[i + 1]
-                
-                # Bright purple/magenta line - thick and highly visible
-                # This is the racing line the driver should follow
-                cv2.line(result, pt1, pt2, (255, 0, 255), 12)
+            # Bright purple/magenta line - thick and highly visible
+            # This is the racing line the driver should follow
+            cv2.drawContours(result, [smoothed_contour], -1, (255, 0, 255), 12)
             
-            # Draw direction indicator at the most recent point
-            cv2.circle(result, self.racing_line_buffer[-1], 15, (0, 0, 0), -1)  # Black outline
-            cv2.circle(result, self.racing_line_buffer[-1], 12, (255, 0, 255), -1)  # Purple center
-            cv2.circle(result, self.racing_line_buffer[-1], 6, (255, 255, 255), -1)  # White inner dot
+            # Find and draw the centerline through the racing line
+            # Get moments to find centroid
+            M = cv2.moments(racing_line_contour)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                
+                # Add current optimal point to buffer for trajectory tracking
+                self.racing_line_buffer.append((cx, cy))
+                
+                # Keep buffer size limited
+                if len(self.racing_line_buffer) > self.max_line_points:
+                    self.racing_line_buffer.pop(0)
+                
+                # Draw trajectory path over time (shows where optimal point moved)
+                if len(self.racing_line_buffer) >= 2:
+                    for i in range(len(self.racing_line_buffer) - 1):
+                        pt1 = self.racing_line_buffer[i]
+                        pt2 = self.racing_line_buffer[i + 1]
+                        # Cyan line for trajectory history
+                        cv2.line(result, pt1, pt2, (255, 255, 0), 6)
+                
+                # Draw current optimal point indicator
+                cv2.circle(result, (cx, cy), 15, (0, 0, 0), -1)  # Black outline
+                cv2.circle(result, (cx, cy), 12, (255, 0, 255), -1)  # Purple center
+                cv2.circle(result, (cx, cy), 6, (255, 255, 255), -1)  # White inner dot
         
         # Add confidence indicator
         confidence = prediction['confidence'].mean()
