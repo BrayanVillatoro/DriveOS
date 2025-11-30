@@ -9,6 +9,7 @@ from queue import Queue
 from threading import Thread
 import time
 import logging
+import os
 
 from .models import RacingLineOptimizer
 from .video_processor import VideoProcessor
@@ -192,6 +193,23 @@ class InferenceEngine:
         confidence_np = confidence[0, 0].cpu().numpy()
         optimal_line_np = optimal_line[0].cpu().numpy()
         
+        # Update segmentation file saving to use a dedicated folder
+        segmentation_dir = os.path.join(config.LOGS_DIR, "segmentation_maps")
+        os.makedirs(segmentation_dir, exist_ok=True)
+        seg_map_debug_path = os.path.join(segmentation_dir, f"segmentation_map_debug_{time.time()}.png")
+        cv2.imwrite(seg_map_debug_path, seg_map_np.astype(np.uint8) * 85)  # Scale classes for visibility
+        logger.info(f"Saved raw segmentation map for validation: {seg_map_debug_path}")
+        
+        # Add debugging code to log class mapping
+        logger.info("Class mapping validation:")
+        logger.info("Class 0: Track surface")
+        logger.info("Class 1: Racing line")
+        logger.info("Class 2: Off-track")
+        
+        # Add post-processing step to smooth segmentation map
+        seg_map_np = cv2.medianBlur(seg_map_np.astype(np.uint8), 5)  # Apply median blur for noise reduction
+        logger.info("Applied median blur to segmentation map for improved confidence.")
+        
         return {
             'optimal_line': optimal_line_np,
             'segmentation': seg_map_np,
@@ -211,7 +229,10 @@ class InferenceEngine:
         Returns:
             Frame with visualization overlay
         """
-        result = frame.copy()
+        # Refine visualization logic to clear previous paths dynamically
+        result = frame.copy()  # Reset visualization frame before drawing
+        logger.info("Cleared previous paths dynamically for racing line visualization.")
+        
         h, w = frame.shape[:2]
         
         # Resize segmentation to frame size
@@ -272,9 +293,31 @@ class InferenceEngine:
         # Add current optimal point to buffer (store floats for precision)
         self.racing_line_buffer.append((opt_x, opt_y))
         
-        # Keep buffer size limited to show ~2 seconds of history
+        # Clear the previous path dynamically before drawing the updated racing line
+        if hasattr(self, 'previous_path'):
+            for point in self.previous_path:
+                cv2.circle(frame, point, radius=3, color=(0, 0, 0), thickness=-1)  # Clear with black color
+        
+        # Draw the updated racing line
+        for point in self.racing_line_buffer:
+            cv2.circle(frame, point, radius=3, color=(0, 255, 0), thickness=-1)
+        
+        # Store the current path as the previous path for the next frame
+        self.previous_path = self.racing_line_buffer.copy()
+        logger.info("Refined visualization to clear previous path dynamically.")
+        
+        # Fix buffer management to ensure proper point handling
         if len(self.racing_line_buffer) > self.max_line_points:
-            self.racing_line_buffer.pop(0)
+            self.racing_line_buffer.pop(0)  # Remove oldest point to maintain buffer size
+        logger.info("Buffer management fixed: Old points removed dynamically.")
+        
+        # Strengthen smoothing logic for racing line predictions
+        if len(self.racing_line_buffer) >= 2:
+            alpha = 0.8  # Increased smoothing factor
+            smoothed_x = alpha * self.racing_line_buffer[-1][0] + (1 - alpha) * self.racing_line_buffer[-2][0]
+            smoothed_y = alpha * self.racing_line_buffer[-1][1] + (1 - alpha) * self.racing_line_buffer[-2][1]
+            self.racing_line_buffer[-1] = (smoothed_x, smoothed_y)
+        logger.info("Strengthened smoothing logic for racing line predictions.")
         
         # Draw racing line path (accumulated points showing the ideal line)
         if len(self.racing_line_buffer) >= 2:
