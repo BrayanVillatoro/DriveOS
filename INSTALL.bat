@@ -98,11 +98,12 @@ if errorlevel 1 (
     echo NVIDIA GPU detected >> "%LOGFILE%"
     echo.
     echo    Choose PyTorch version:
-    echo    1. CUDA 11.8 (Recommended for most NVIDIA GPUs)
-    echo    2. CUDA 12.1 (For newest GPUs - RTX 40/50 series)
-    echo    3. CPU only (Slower but always compatible)
+    echo    1. CUDA 11.8 (Recommended for GTX/RTX 20/30 series)
+    echo    2. CUDA 12.1 (For RTX 40 series)
+    echo    3. PyTorch Nightly (For RTX 50 series with CUDA 12.8+)
+    echo    4. CPU only (Slower but always compatible)
     echo.
-    set /p gpu_choice="Enter choice (1-3) [default: 1]: "
+    set /p gpu_choice="Enter choice (1-4) [default: 1]: "
     if "%gpu_choice%"=="" set gpu_choice=1
     echo User choice: %gpu_choice% >> "%LOGFILE%"
     
@@ -114,6 +115,11 @@ if errorlevel 1 (
         echo    Installing PyTorch with CUDA 12.1...
         echo Installing PyTorch with CUDA 12.1 >> "%LOGFILE%"
         .venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --quiet >> "%LOGFILE%" 2>&1
+    ) else if "%gpu_choice%"=="3" (
+        echo    Installing PyTorch Nightly (RTX 50 series support)...
+        echo Installing PyTorch Nightly >> "%LOGFILE%"
+        echo    Note: Nightly builds may have experimental features
+        .venv\Scripts\python.exe -m pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu124 --quiet >> "%LOGFILE%" 2>&1
     ) else (
         echo    Installing CPU version...
         echo Installing CPU version >> "%LOGFILE%"
