@@ -255,7 +255,9 @@ class InferenceEngine:
         point_y = max(0, min(h - 1, point_y))
         
         # Add current optimal point to buffer
-        self.racing_line_buffer.append((point_x, point_y))
+        current_point = (point_x, point_y)
+        if not self.racing_line_buffer or current_point != self.racing_line_buffer[-1]:
+            self.racing_line_buffer.append(current_point)
         
         # Keep buffer size limited to show ~2 seconds of history
         if len(self.racing_line_buffer) > self.max_line_points:
