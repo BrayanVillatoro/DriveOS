@@ -80,6 +80,10 @@ class RacingLineDataset(Dataset):
         image = cv2.resize(image, target_size)
         mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
         
+        # Clamp mask values to valid range (0-2: background, racing line, boundaries)
+        # This handles cases where masks may have invalid pixel values
+        mask = np.clip(mask, 0, 2)
+        
         # Extract racing line point from mask (class 1)
         racing_line_pixels = np.where(mask == 1)
         if len(racing_line_pixels[0]) > 0:

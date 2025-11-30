@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 .venv/
+.venv311/
 venv/
 ENV/
 env/
@@ -44,6 +45,7 @@ env/
 # Logs
 logs/
 *.log
+install_log.txt
 
 # Data
 # Allow sample training data, but ignore user-generated data directories

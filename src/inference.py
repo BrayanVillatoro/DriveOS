@@ -21,22 +21,28 @@ logger = logging.getLogger(__name__)
 class InferenceEngine:
     """Real-time inference for racing line prediction"""
     
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, device: str = None):
         """
         Initialize inference engine
         
         Args:
             model_path: Path to trained model weights
+            device: Device to use ('cuda' or 'cpu'). If None, uses config.get_device()
         """
-        self.device = config.get_device()
+        if device is None:
+            self.device = config.get_device()
+        else:
+            self.device = torch.device(device)
         self.model = RacingLineOptimizer()
         
         # Load model weights
         if model_path:
             try:
+                logger.info(f"📦 Loading model from: {model_path}")
+                logger.info(f"🖥️  Using device: {self.device}")
                 checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
                 self.model.load_state_dict(checkpoint['model_state_dict'])
-                logger.info(f"✓ Model loaded from {model_path}")
+                logger.info(f"✓ Model loaded successfully from {model_path}")
             except FileNotFoundError:
                 logger.warning(
                     f"⚠️  Model file not found: {model_path}\n"
@@ -62,7 +68,7 @@ class InferenceEngine:
         
         # Racing line buffer for visualization (stores recent points)
         self.racing_line_buffer = []
-        self.max_line_points = 30  # Show last 30 points (~1 second at 30fps)
+        self.max_line_points = 60  # Show last 60 points (~2 seconds at 30fps for better lookahead)
         
         # Telemetry buffer for sequence processing
         self.telemetry_buffer: List[TelemetryPoint] = []
@@ -224,29 +230,25 @@ class InferenceEngine:
         
         # Draw racing line path that driver should follow
         if len(self.racing_line_buffer) >= 2:
-            # Draw thick background line first (for better visibility)
+            # Draw thick black outline first (for maximum visibility)
+            for i in range(len(self.racing_line_buffer) - 1):
+                pt1 = self.racing_line_buffer[i]
+                pt2 = self.racing_line_buffer[i + 1]
+                cv2.line(result, pt1, pt2, (0, 0, 0), 18)
+            
+            # Draw the main racing line - bright and consistent
             for i in range(len(self.racing_line_buffer) - 1):
                 pt1 = self.racing_line_buffer[i]
                 pt2 = self.racing_line_buffer[i + 1]
                 
-                # Black outline for contrast
-                cv2.line(result, pt1, pt2, (0, 0, 0), 12)
+                # Bright purple/magenta line - thick and highly visible
+                # This is the racing line the driver should follow
+                cv2.line(result, pt1, pt2, (255, 0, 255), 12)
             
-            # Draw colored racing line on top
-            for i in range(len(self.racing_line_buffer) - 1):
-                pt1 = self.racing_line_buffer[i]
-                pt2 = self.racing_line_buffer[i + 1]
-                
-                # Fade effect: newer points are brighter
-                alpha = (i + 1) / len(self.racing_line_buffer)
-                thickness = int(4 + alpha * 4)  # 4-8 pixels thick
-                
-                # Bright purple/magenta line for the racing line to follow
-                cv2.line(result, pt1, pt2, (255, 0, 255), thickness)
-            
-            # Draw a larger circle at the current target point with outline
-            cv2.circle(result, self.racing_line_buffer[-1], 12, (0, 0, 0), -1)  # Black outline
-            cv2.circle(result, self.racing_line_buffer[-1], 10, (255, 255, 0), -1)  # Yellow center
+            # Draw direction indicator at the most recent point
+            cv2.circle(result, self.racing_line_buffer[-1], 15, (0, 0, 0), -1)  # Black outline
+            cv2.circle(result, self.racing_line_buffer[-1], 12, (255, 0, 255), -1)  # Purple center
+            cv2.circle(result, self.racing_line_buffer[-1], 6, (255, 255, 255), -1)  # White inner dot
         
         # Add confidence indicator
         confidence = prediction['confidence'].mean()
@@ -349,17 +351,27 @@ class RealtimeProcessor:
 class BatchProcessor:
     """Process entire video files in batch mode"""
     
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, device: str = 'auto'):
         """
         Initialize batch processor
         
         Args:
             model_path: Path to model weights
+            device: Device to use ('auto', 'cuda', or 'cpu')
         """
-        self.engine = InferenceEngine(model_path)
+        # Determine actual device
+        if device == 'auto':
+            import torch
+            actual_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        else:
+            actual_device = device
+            
+        self.device = actual_device
+        self.engine = InferenceEngine(model_path, device=actual_device)
     
     def process_video(self, video_path: str, output_path: str,
-                     telemetry_path: Optional[str] = None) -> Dict:
+                     telemetry_path: Optional[str] = None,
+                     stop_callback: Optional[callable] = None) -> Dict:
         """
         Process entire video file
         
@@ -367,6 +379,7 @@ class BatchProcessor:
             video_path: Input video path
             output_path: Output video path
             telemetry_path: Optional telemetry CSV path
+            stop_callback: Optional callback function that returns True to stop processing
             
         Returns:
             Processing statistics
@@ -409,6 +422,11 @@ class BatchProcessor:
                 inference_times = []
                 
                 for frame_num, frame in vp.get_frames():
+                    # Check if stop requested
+                    if stop_callback and stop_callback():
+                        logger.info(f"Processing stopped by user at frame {frame_num}")
+                        break
+                    
                     # Get corresponding telemetry
                     telemetry = None
                     if telemetry_data and frame_num < len(telemetry_data):

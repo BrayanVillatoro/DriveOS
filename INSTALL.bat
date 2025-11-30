@@ -126,16 +126,16 @@ echo. >> "%LOGFILE%"
 
 echo [5/6] Installing dependencies...
 echo [STEP 5] Installing dependencies... >> "%LOGFILE%"
-.venv\Scripts\python.exe -m pip install -r requirements.txt --quiet >> "%LOGFILE%" 2>&1
+.venv\Scripts\python.exe -m pip install -r config\requirements.txt --quiet >> "%LOGFILE%" 2>&1
 echo Step 5 completed successfully >> "%LOGFILE%"
 echo. >> "%LOGFILE%"
 
 echo [6/6] Creating icon and desktop shortcut...
 echo [STEP 6] Creating icon and desktop shortcut... >> "%LOGFILE%"
-if not exist DriveOS.ico (
+if not exist launchers\DriveOS.ico (
     echo Icon does not exist, creating... >> "%LOGFILE%"
-    .venv\Scripts\python.exe create_icon.py >> "%LOGFILE%" 2>&1
-    if exist DriveOS.ico (
+    .venv\Scripts\python.exe scripts\create_icon.py >> "%LOGFILE%" 2>&1
+    if exist launchers\DriveOS.ico (
         echo Icon created successfully >> "%LOGFILE%"
     ) else (
         echo WARNING: Icon creation failed >> "%LOGFILE%"
@@ -145,13 +145,14 @@ if not exist DriveOS.ico (
 )
 
 echo Creating desktop shortcut... >> "%LOGFILE%"
-powershell -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%USERPROFILE%\Desktop\DriveOS.lnk'); $s.TargetPath = '%CD%\DriveOS.vbs'; $s.WorkingDirectory = '%CD%'; $s.Description = 'DriveOS Racing Line Analyzer'; $s.IconLocation = '%CD%\DriveOS.ico'; $s.Save()" >> "%LOGFILE%" 2>&1
-if exist "%USERPROFILE%\Desktop\DriveOS.lnk" (
-    echo    Shortcut created successfully!
-    echo Shortcut created successfully >> "%LOGFILE%"
-) else (
+powershell -ExecutionPolicy Bypass -Command "$desktop = [Environment]::GetFolderPath('Desktop'); $ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut(Join-Path $desktop 'DriveOS.lnk'); $s.TargetPath = '%CD%\launchers\DriveOS.vbs'; $s.WorkingDirectory = '%CD%'; $s.Description = 'DriveOS Racing Line Analyzer'; $s.IconLocation = '%CD%\launchers\DriveOS.ico,0'; $s.Save(); Write-Output $s.FullName" >> "%LOGFILE%" 2>&1
+powershell -ExecutionPolicy Bypass -Command "$desktop = [Environment]::GetFolderPath('Desktop'); Test-Path (Join-Path $desktop 'DriveOS.lnk')" > nul 2>&1
+if errorlevel 1 (
     echo    Warning: Could not create shortcut
     echo WARNING: Shortcut creation failed >> "%LOGFILE%"
+) else (
+    echo    Shortcut created successfully!
+    echo Shortcut created successfully >> "%LOGFILE%"
 )
 echo Step 6 completed >> "%LOGFILE%"
 echo. >> "%LOGFILE%"
@@ -187,7 +188,7 @@ set /p launch="Launch now? (y/n): "
 echo User launch choice: %launch% >> "%LOGFILE%"
 if /i "%launch%"=="y" (
     echo Launching DriveOS... >> "%LOGFILE%"
-    start "" "%CD%\DriveOS.bat"
+    start "" "%CD%\launchers\DriveOS.bat"
 )
 
 echo.

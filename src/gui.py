@@ -27,12 +27,21 @@ class DriveOSGUI:
         self.root = root
         self.root.title("DriveOS - AI Racing Line Analyzer")
         self.root.geometry("1200x800")
+        # Start maximized
+        self.root.state('zoomed')
         
-        # Set window icon if available
+        # Set window icon with absolute path (for both window and taskbar)
         try:
-            self.root.iconbitmap(default='DriveOS.ico')
-        except:
-            pass
+            from pathlib import Path
+            icon_path = Path(__file__).parent.parent / 'launchers' / 'DriveOS.ico'
+            if icon_path.exists():
+                self.root.iconbitmap(str(icon_path))
+                # For Windows taskbar grouping
+                import ctypes
+                myappid = 'BrayanVillatoro.DriveOS.RacingLineAnalyzer.1.0'
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception as e:
+            print(f"Could not set icon: {e}")
         
         # Configure style
         self.style = ttk.Style()
@@ -53,7 +62,8 @@ class DriveOSGUI:
             'error': '#f48771',        # Light red
             'purple': '#c586c0',       # Purple
             'gradient_start': '#007acc',
-            'gradient_end': '#4ec9b0'
+            'gradient_end': '#4ec9b0',
+            'info_bg': '#1a3a52'       # Info banner background (dark blue)
         }
         
         # Configure root background
@@ -199,6 +209,11 @@ class DriveOSGUI:
         self.training_tab = ttk.Frame(self.notebook, style='Card.TFrame')
         self.notebook.add(self.training_tab, text='  🎯 Train Model  ')
         self.create_training_view()
+        
+        # Tab 4: Annotation Tool
+        self.annotation_tab = ttk.Frame(self.notebook, style='Card.TFrame')
+        self.notebook.add(self.annotation_tab, text='  ✏️ Create Training Data  ')
+        self.create_annotation_view()
     
     def on_tab_changed(self, event):
         """Handle tab change events"""
@@ -330,8 +345,8 @@ class DriveOSGUI:
                                    text="Quick Start Guide\n\n"
                                         "① Select your racing video\n"
                                         "② Choose output location\n"
-                                        "③ Click Analyze to process\n"
-                                        "④ Get your video with the optimal racing line!",
+                                        "③ Choose CPU or GPU processing\n"
+                                        "④ Click Analyze to get your video with the optimal racing line!",
                                    font=('Segoe UI', 11),
                                    bg=self.colors['bg_light'],
                                    fg=self.colors['fg'],
@@ -374,11 +389,39 @@ class DriveOSGUI:
                   command=self.browse_output,
                   style='Action.TButton').pack()
         
+        # Device selection
+        device_frame = ttk.LabelFrame(self.upload_tab, text="Step 3: Choose Processing Device", padding=25)
+        device_frame.pack(fill='x', padx=30, pady=10)
+        
+        tk.Label(device_frame, text="Select which hardware to use for AI processing:",
+                font=('Segoe UI', 10),
+                fg=self.colors['fg'],
+                bg=self.colors['card'],
+                anchor='w').pack(fill='x', pady=(0, 15))
+        
+        self.analyze_device_var = tk.StringVar(value="auto")
+        
+        device_radio_frame = tk.Frame(device_frame, bg=self.colors['card'])
+        device_radio_frame.pack(anchor='w')
+        
+        ttk.Radiobutton(device_radio_frame, text="Auto (Recommended - GPU if available, otherwise CPU)", 
+                       variable=self.analyze_device_var, value="auto").pack(anchor='w', pady=3)
+        ttk.Radiobutton(device_radio_frame, text="CPU Only (Slower but works on all computers)", 
+                       variable=self.analyze_device_var, value="cpu").pack(anchor='w', pady=3)
+        ttk.Radiobutton(device_radio_frame, text="GPU - CUDA (10-20x faster, requires NVIDIA GPU)", 
+                       variable=self.analyze_device_var, value="cuda").pack(anchor='w', pady=3)
+        
+        # Initialize stop flag for batch processing
+        self.stop_batch_analysis = False
+        
         # Process button - LARGE and prominent
         process_frame = tk.Frame(self.upload_tab, bg=self.colors['card'])
         process_frame.pack(fill='x', padx=30, pady=30)
         
-        self.process_btn = tk.Button(process_frame,
+        button_container = tk.Frame(process_frame, bg=self.colors['card'])
+        button_container.pack()
+        
+        self.process_btn = tk.Button(button_container,
                                      text="▶  ANALYZE VIDEO",
                                      command=self.start_batch_processing,
                                      font=('Segoe UI', 18, 'bold'),
@@ -392,7 +435,23 @@ class DriveOSGUI:
                                      pady=25,
                                      cursor='hand2',
                                      state='disabled')
-        self.process_btn.pack()
+        self.process_btn.pack(side='left', padx=5)
+        
+        self.analyze_stop_btn = tk.Button(button_container,
+                                          text="⏹  STOP",
+                                          command=self.stop_batch_processing,
+                                          font=('Segoe UI', 18, 'bold'),
+                                          bg='#d13438',
+                                          fg='white',
+                                          activebackground='#a02528',
+                                          activeforeground='white',
+                                          relief='flat',
+                                          borderwidth=0,
+                                          padx=50,
+                                          pady=25,
+                                          cursor='hand2',
+                                          state='disabled')
+        self.analyze_stop_btn.pack(side='left', padx=5)
         
         # Progress
         progress_frame = ttk.LabelFrame(self.upload_tab, text="Processing Status", padding=20)
@@ -409,6 +468,14 @@ class DriveOSGUI:
                                       fg=self.colors['fg'],
                                       bg=self.colors['card'])
         self.progress_label.pack()
+        
+        # Model info label
+        self.model_info_label = tk.Label(progress_frame,
+                                        text="📦 Model: models/racing_line_model.pth | 🖥️ Device: Not started",
+                                        font=('Segoe UI', 10),
+                                        fg=self.colors['accent'],
+                                        bg=self.colors['card'])
+        self.model_info_label.pack(pady=(10, 0))
 
         
     def create_training_view(self):
@@ -416,13 +483,39 @@ class DriveOSGUI:
         # Initialize training data directory variable
         self.training_data_var = tk.StringVar(value="data/training")
         
+        # Workflow explanation banner
+        info_frame = tk.Frame(self.training_tab, bg=self.colors['info_bg'], relief='solid', bd=1)
+        info_frame.pack(fill='x', padx=30, pady=(15, 10))
+        
+        tk.Label(info_frame, 
+                text="💡 How Training Works",
+                font=('Segoe UI', 12, 'bold'),
+                fg=self.colors['accent'],
+                bg=self.colors['info_bg']).pack(anchor='w', padx=15, pady=(10, 5))
+        
+        workflow_text = (
+            "1. CREATE DATA: Use 'Create Training Data' tab to annotate racing lines on video frames\n"
+            "2. TRAIN MODEL: Use the data to train the AI (this tab - takes 30-60 minutes)\n"
+            "3. USE MODEL: The trained model (racing_line_model.pth) will be used to analyze new videos\n\n"
+            "🎯 Current Status: The model in 'models/racing_line_model.pth' is what the Analyze Video tab uses.\n"
+            "Training will REPLACE this model with a new one based on your custom data!"
+        )
+        
+        tk.Label(info_frame,
+                text=workflow_text,
+                font=('Segoe UI', 10),
+                fg=self.colors['fg'],
+                bg=self.colors['info_bg'],
+                justify='left',
+                anchor='w').pack(anchor='w', padx=15, pady=(0, 10))
+        
         # STEP 1: Generate Training Data
-        step1_frame = ttk.LabelFrame(self.training_tab, text="① STEP 1: Generate Training Data", padding=25)
+        step1_frame = ttk.LabelFrame(self.training_tab, text="① STEP 1: Prepare Training Data", padding=25)
         step1_frame.pack(fill='x', padx=30, pady=(10, 5))
         
-        tk.Label(step1_frame, text="First, create training data from a racing video.",
+        tk.Label(step1_frame, text="Your annotated data from 'Create Training Data' tab should be in the folder below.\nOr use 'Generate Training Data' to extract racing lines automatically from a video.",
                 font=('Segoe UI', 10), fg=self.colors['fg'], bg=self.colors['card'],
-                anchor='w').pack(fill='x', pady=(0, 15))
+                anchor='w', justify='left').pack(fill='x', pady=(0, 15))
         
         # Action buttons
         button_frame1 = tk.Frame(step1_frame, bg=self.colors['card'])
@@ -439,17 +532,17 @@ class DriveOSGUI:
                                           style='Info.TLabel', foreground=self.colors['warning'])
         self.data_stats_label.pack(pady=(10, 0), anchor='w')
         
-        # STEP 2: Configure Training Parameters
-        step2_frame = ttk.LabelFrame(self.training_tab, text="② STEP 2: Configure Training Parameters", padding=25)
-        step2_frame.pack(fill='x', padx=30, pady=5)
+        # Create horizontal container for steps 2 and 3
+        steps_container = tk.Frame(self.training_tab, bg=self.colors['card'])
+        steps_container.pack(fill='x', padx=30, pady=5)
         
-        tk.Label(step2_frame, text="Adjust these settings based on your needs and hardware.",
-                font=('Segoe UI', 10), fg=self.colors['fg'], bg=self.colors['card'],
-                anchor='w').pack(fill='x', pady=(0, 15))
+        # STEP 2: Configure Training Parameters (LEFT SIDE)
+        step2_frame = ttk.LabelFrame(steps_container, text="② STEP 2: Parameters", padding=15)
+        step2_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
         
         # Training parameters grid
         params_frame = tk.Frame(step2_frame, bg=self.colors['card'])
-        params_frame.pack(fill='x', pady=(0, 10))
+        params_frame.pack(fill='x')
         
         # Epochs
         tk.Label(params_frame, text="Epochs:",
@@ -482,60 +575,60 @@ class DriveOSGUI:
         ttk.Entry(params_frame, textvariable=self.lr_var,
                  width=20).grid(row=2, column=1, padx=15, sticky='w')
         
-        # STEP 3: Hardware Configuration
-        step3_frame = ttk.LabelFrame(self.training_tab, text="③ STEP 3: Select Hardware", padding=25)
-        step3_frame.pack(fill='x', padx=30, pady=5)
-        
-        tk.Label(step3_frame, text="Choose CPU or GPU and configure threads.",
-                font=('Segoe UI', 10), fg=self.colors['fg'], bg=self.colors['card'],
-                anchor='w').pack(fill='x', pady=(0, 15))
-        
-        hardware_frame = tk.Frame(step3_frame, bg=self.colors['card'])
-        hardware_frame.pack(fill='x', pady=(0, 10))
+        # STEP 3: Hardware Configuration (RIGHT SIDE)
+        step3_frame = ttk.LabelFrame(steps_container, text="③ STEP 3: Hardware", padding=15)
+        step3_frame.pack(side='left', fill='both', expand=True, padx=(5, 0))
         
         # Device selection
-        tk.Label(hardware_frame, text="Device:",
+        device_container = tk.Frame(step3_frame, bg=self.colors['card'])
+        device_container.pack(fill='x', pady=(0, 10))
+        
+        tk.Label(device_container, text="Device:",
                 fg=self.colors['fg'],
                 bg=self.colors['card'],
-                font=('Segoe UI', 10)).grid(row=0, column=0, sticky='w', pady=10, padx=(0, 20))
+                font=('Segoe UI', 10)).pack(anchor='w', pady=(0, 5))
+        
         self.device_var = tk.StringVar(value="cpu")
-        device_frame = tk.Frame(hardware_frame, bg=self.colors['card'])
-        device_frame.grid(row=0, column=1, sticky='w', padx=15)
-        ttk.Radiobutton(device_frame, text="💻 CPU", variable=self.device_var, 
-                       value="cpu", command=self.update_hardware_config).pack(side='left', padx=15)
-        ttk.Radiobutton(device_frame, text="🎮 GPU (CUDA)", variable=self.device_var, 
-                       value="cuda", command=self.update_hardware_config).pack(side='left', padx=15)
+        device_btns = tk.Frame(device_container, bg=self.colors['card'])
+        device_btns.pack(anchor='w', padx=10)
+        ttk.Radiobutton(device_btns, text="💻 CPU", variable=self.device_var, 
+                       value="cpu", command=self.update_hardware_config).pack(side='left', padx=5)
+        ttk.Radiobutton(device_btns, text="🎮 GPU (CUDA)", variable=self.device_var, 
+                       value="cuda", command=self.update_hardware_config).pack(side='left', padx=5)
         
         # CPU cores selection
-        self.cpu_cores_label = tk.Label(hardware_frame, text="CPU Threads:",
+        cores_container = tk.Frame(step3_frame, bg=self.colors['card'])
+        cores_container.pack(fill='x')
+        
+        self.cpu_cores_label = tk.Label(cores_container, text="CPU Threads:",
                                         fg=self.colors['fg'],
                                         bg=self.colors['card'],
                                         font=('Segoe UI', 10))
-        self.cpu_cores_label.grid(row=1, column=0, sticky='w', pady=10, padx=(0, 20))
+        self.cpu_cores_label.pack(anchor='w', pady=(0, 5))
         
         self.max_cpu_cores = os.cpu_count() or 8
         self.cpu_cores_var = tk.IntVar(value=min(self.max_cpu_cores, 8))
         
-        cores_control_frame = tk.Frame(hardware_frame, bg=self.colors['card'])
-        cores_control_frame.grid(row=1, column=1, sticky='w', padx=15)
+        cores_control_frame = tk.Frame(cores_container, bg=self.colors['card'])
+        cores_control_frame.pack(anchor='w', padx=10)
         
         self.cpu_cores_scale = ttk.Scale(cores_control_frame, from_=1, to=self.max_cpu_cores, 
                                          variable=self.cpu_cores_var,
-                                         orient='horizontal', length=250)
-        self.cpu_cores_scale.pack(side='left', padx=15)
+                                         orient='horizontal', length=200)
+        self.cpu_cores_scale.pack(side='left', padx=5)
         self.cpu_cores_value_label = tk.Label(cores_control_frame, textvariable=self.cpu_cores_var, width=4,
                                               fg=self.colors['accent'],
                                               bg=self.colors['card'],
                                               font=('Segoe UI', 12, 'bold'))
-        self.cpu_cores_value_label.pack(side='left', padx=15)
+        self.cpu_cores_value_label.pack(side='left', padx=5)
         
         # STEP 4: Start Training
         step4_frame = ttk.LabelFrame(self.training_tab, text="④ STEP 4: Train the Model", padding=25)
         step4_frame.pack(fill='x', padx=30, pady=5)
         
-        tk.Label(step4_frame, text="Select your training data directory and start training!",
+        tk.Label(step4_frame, text="Verify your training data directory below (should contain 'images' and 'masks' folders), then click START TRAINING.\nTraining takes 30-60 minutes and creates a NEW racing_line_model.pth file.",
                 font=('Segoe UI', 10), fg=self.colors['fg'], bg=self.colors['card'],
-                anchor='w').pack(fill='x', pady=(0, 15))
+                anchor='w', justify='left').pack(fill='x', pady=(0, 15))
         
         # Training data directory selection
         dir_frame = tk.Frame(step4_frame, bg=self.colors['card'])
@@ -558,11 +651,32 @@ class DriveOSGUI:
         ttk.Button(dir_frame, text="🔄 Refresh",
                   command=self.update_data_stats).pack(side='left', padx=5)
         
-        # Train button
-        self.train_btn = ttk.Button(step4_frame, text="🚀 Start Training",
+        # Initialize training stop flag
+        self.stop_training = False
+        
+        # Train buttons container
+        train_btn_container = tk.Frame(step4_frame, bg=self.colors['card'])
+        train_btn_container.pack(pady=(0, 10))
+        
+        self.train_btn = ttk.Button(train_btn_container, text="🚀 Start Training",
                                     command=self.start_training,
                                     style='Accent.TButton')
-        self.train_btn.pack(pady=(0, 10))
+        self.train_btn.pack(side='left', padx=5)
+        
+        self.train_stop_btn = tk.Button(train_btn_container,
+                                        text="⏹ Stop Training",
+                                        command=self.stop_training_process,
+                                        font=('Segoe UI', 10, 'bold'),
+                                        bg='#d13438',
+                                        fg='white',
+                                        activebackground='#a02528',
+                                        activeforeground='white',
+                                        relief='flat',
+                                        padx=20,
+                                        pady=10,
+                                        cursor='hand2',
+                                        state='disabled')
+        self.train_stop_btn.pack(side='left', padx=5)
         
         # Progress section
         self.training_progress_var = tk.DoubleVar()
@@ -580,14 +694,24 @@ class DriveOSGUI:
         metrics_frame = ttk.LabelFrame(self.training_tab, text="Training Output & Metrics", padding=10)
         metrics_frame.pack(fill='both', expand=True, padx=20, pady=(5, 10))
         
-        self.metrics_text = tk.Text(metrics_frame, height=10, 
+        # Create text widget with scrollbar
+        text_container = tk.Frame(metrics_frame, bg=self.colors['bg_light'])
+        text_container.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        scrollbar = ttk.Scrollbar(text_container)
+        scrollbar.pack(side='right', fill='y')
+        
+        self.metrics_text = tk.Text(text_container, height=15, 
                                    bg=self.colors['bg_light'], 
                                    fg=self.colors['success'],
-                                   font=('Consolas', 10),
+                                   font=('Consolas', 9),
                                    borderwidth=0,
                                    relief='flat',
-                                   insertbackground=self.colors['success'])
-        self.metrics_text.pack(fill='both', expand=True, padx=5, pady=5)
+                                   insertbackground=self.colors['success'],
+                                   yscrollcommand=scrollbar.set,
+                                   wrap='word')
+        self.metrics_text.pack(side='left', fill='both', expand=True)
+        scrollbar.config(command=self.metrics_text.yview)
         
         # Check for existing training data on startup
         self.root.after(500, self.update_data_stats)
@@ -596,16 +720,110 @@ class DriveOSGUI:
         """Update hardware configuration controls based on device selection"""
         if self.device_var.get() == "cpu":
             # Show CPU cores controls
-            self.cpu_cores_label.grid()
+            self.cpu_cores_label.pack(anchor='w', pady=(0, 5))
             self.cpu_cores_scale.pack(side='left', padx=5)
             self.cpu_cores_value_label.pack(side='left', padx=5)
-            self.cpu_cores_info.grid()
         else:
             # Hide CPU cores controls for GPU
-            self.cpu_cores_label.grid_remove()
+            self.cpu_cores_label.pack_forget()
             self.cpu_cores_scale.pack_forget()
             self.cpu_cores_value_label.pack_forget()
-            self.cpu_cores_info.grid_remove()
+    
+    def create_annotation_view(self):
+        """Create annotation tool interface"""
+        # Introduction section
+        intro_frame = ttk.LabelFrame(self.annotation_tab, text="📝 Create Training Data Interactively", padding=25)
+        intro_frame.pack(fill='x', padx=30, pady=(20, 10))
+        
+        intro_text = """This tool allows you to manually annotate racing videos to create high-quality training data.
+
+You can draw:
+• The ideal racing line through corners
+• Track boundaries (left and right edges)
+• Track surface areas
+
+The tool will automatically generate labeled images and masks for training."""
+        
+        tk.Label(intro_frame, text=intro_text,
+                font=('Segoe UI', 10), fg=self.colors['fg'], bg=self.colors['card'],
+                justify='left', anchor='w').pack(fill='x')
+        
+        # Video selection
+        video_frame = ttk.LabelFrame(self.annotation_tab, text="Select Video to Annotate", padding=25)
+        video_frame.pack(fill='x', padx=30, pady=10)
+        
+        self.annotation_video_var = tk.StringVar(value="No video selected")
+        
+        file_frame = tk.Frame(video_frame, bg=self.colors['card'])
+        file_frame.pack(fill='x', pady=(0, 15))
+        
+        tk.Label(file_frame, text="Video File:",
+                fg=self.colors['fg'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(0, 15))
+        
+        video_entry = tk.Entry(file_frame, textvariable=self.annotation_video_var, width=50,
+                              bg='#3c3c3c', fg='#ffffff', font=('Segoe UI', 9),
+                              relief='solid', bd=1, insertbackground='#ffffff',
+                              selectbackground=self.colors['accent'], selectforeground='#ffffff')
+        video_entry.pack(side='left', padx=5, fill='x', expand=True)
+        
+        ttk.Button(file_frame, text="Browse Video...",
+                  command=self.browse_annotation_video).pack(side='left', padx=5)
+        
+        # Output directory
+        output_frame = tk.Frame(video_frame, bg=self.colors['card'])
+        output_frame.pack(fill='x', pady=(0, 15))
+        
+        tk.Label(output_frame, text="Save To:",
+                fg=self.colors['fg'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(0, 15))
+        
+        self.annotation_output_var = tk.StringVar(value="data/user_annotations")
+        
+        output_entry = tk.Entry(output_frame, textvariable=self.annotation_output_var, width=50,
+                               bg='#3c3c3c', fg='#ffffff', font=('Segoe UI', 9),
+                               relief='solid', bd=1, insertbackground='#ffffff',
+                               selectbackground=self.colors['accent'], selectforeground='#ffffff')
+        output_entry.pack(side='left', padx=5, fill='x', expand=True)
+        
+        ttk.Button(output_frame, text="Browse...",
+                  command=self.browse_annotation_output).pack(side='left', padx=5)
+        
+        # Launch button
+        self.launch_annotation_btn = ttk.Button(video_frame, text="🎨 Launch Annotation Tool",
+                                               command=self.launch_annotation_tool,
+                                               style='Accent.TButton',
+                                               state='disabled')
+        self.launch_annotation_btn.pack(pady=(10, 0))
+        
+        # Instructions
+        instructions_frame = ttk.LabelFrame(self.annotation_tab, text="How to Use", padding=25)
+        instructions_frame.pack(fill='both', expand=True, padx=30, pady=10)
+        
+        instructions = """⌨️ Keyboard Controls:
+1, 2, 3    - Switch between Racing Line, Left Boundary, Right Boundary modes
+SPACE      - Save current frame and advance to next
+C          - Clear current annotations
+N          - Next frame (skip forward 10 frames)
+B          - Back frame (skip backward 10 frames)
+Q          - Quit annotation tool
+
+🖱️ Mouse Controls:
+Left Click + Drag  - Draw the line for current mode
+Right Click        - Undo last point
+
+💡 Tips:
+• Start with the racing line (yellow) - this is the most important
+• Then mark left boundary (red) and right boundary (blue)
+• The tool will automatically create segmentation masks
+• Annotate frames with different track conditions and corner types
+• Aim for at least 50-100 annotated frames for good results"""
+        
+        tk.Label(instructions_frame, text=instructions,
+                font=('Consolas', 9), fg=self.colors['fg'], bg=self.colors['card'],
+                justify='left', anchor='w').pack(fill='both', expand=True)
     
     # Live View Methods
     def update_source_controls(self):
@@ -884,22 +1102,60 @@ class DriveOSGUI:
         input_name = Path(video_path).stem
         output_path = Path(self.output_dir_var.get()) / f"analyzed_{input_name}.mp4"
         
+        self.stop_batch_analysis = False
         self.process_btn.config(state='disabled')
+        self.analyze_stop_btn.config(state='normal', bg='#d13438')
         self.progress_label.config(text="🔄 Processing video with AI... This may take a few minutes.")
         self.progress_var.set(0)
+        
+        # Get device selection
+        device = self.analyze_device_var.get()
         
         # Start processing thread
         thread = threading.Thread(
             target=self.batch_processing_thread,
-            args=(video_path, str(output_path)),
+            args=(video_path, str(output_path), device),
             daemon=True
         )
         thread.start()
         
-    def batch_processing_thread(self, video_path, output_path):
+    def stop_batch_processing(self):
+        """Stop batch processing"""
+        self.stop_batch_analysis = True
+        self.progress_label.config(text="⏹ Stopping analysis...")
+        self.analyze_stop_btn.config(state='disabled')
+    
+    def batch_processing_thread(self, video_path, output_path, device='auto'):
         """Background thread for batch processing"""
         try:
-            processor = BatchProcessor('models/racing_line_model.pth')
+            # Set device
+            import torch
+            if device == 'auto':
+                actual_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            elif device == 'cuda':
+                # Validate CUDA is actually available
+                if not torch.cuda.is_available():
+                    raise RuntimeError(
+                        "GPU/CUDA is not available. This could mean:\n\n"
+                        "1. PyTorch was installed without CUDA support\n"
+                        "2. No NVIDIA GPU is present\n"
+                        "3. CUDA drivers are not installed\n\n"
+                        "Please select 'CPU Only' or 'Auto' mode instead.\n\n"
+                        "To enable GPU support, you may need to reinstall PyTorch with CUDA."
+                    )
+                actual_device = 'cuda'
+            else:
+                actual_device = device
+            
+            model_path = 'models/racing_line_model.pth'
+            self.progress_label.config(text=f"📦 Loading model: {model_path}")
+            self.root.update()
+            
+            processor = BatchProcessor(model_path, device=actual_device)
+            
+            self.model_info_label.config(text=f"📦 Model: {model_path} | 🖥️ Device: {actual_device.upper()}")
+            self.progress_label.config(text=f"🚀 Processing with {actual_device.upper()}...")
+            self.root.update()
             
             # Get total frames
             cap = cv2.VideoCapture(video_path)
@@ -910,7 +1166,20 @@ class DriveOSGUI:
             self.progress_var.set(25)
             
             # Process with progress updates
-            stats = processor.process_video(video_path, output_path)
+            stats = processor.process_video(video_path, output_path, 
+                                           stop_callback=lambda: self.stop_batch_analysis)
+            
+            # Check if stopped or completed
+            if self.stop_batch_analysis:
+                self.progress_var.set(0)
+                self.progress_label.config(text="⏹ Analysis stopped by user")
+                messagebox.showinfo(
+                    "Analysis Stopped",
+                    f"Video analysis was stopped.\n\n"
+                    f"Frames processed: {stats['total_frames']}\n\n"
+                    f"Note: Partial output may be incomplete."
+                )
+                return
             
             self.progress_var.set(100)
             self.progress_label.config(text="✅ Analysis complete!")
@@ -921,6 +1190,8 @@ class DriveOSGUI:
                 f"Your racing video has been analyzed successfully!\n\n"
                 f"The analyzed video with the optimal racing line (purple) has been saved to:\n\n"
                 f"{output_path}\n\n"
+                f"Model used: {model_path}\n"
+                f"Device: {actual_device.upper()}\n"
                 f"Average processing time: {stats['avg_inference_time']:.1f}ms per frame\n"
                 f"Total frames analyzed: {stats['total_frames']}"
             )
@@ -932,12 +1203,15 @@ class DriveOSGUI:
             
         except Exception as e:
             self.progress_label.config(text=f"❌ Error: {str(e)}")
+            self.progress_var.set(0)
             messagebox.showerror("Processing Error", 
                                f"Sorry, the video could not be processed.\n\n"
                                f"Error: {str(e)}\n\n"
                                f"Make sure the video file is valid and not corrupted.")
         finally:
             self.process_btn.config(state='normal', bg=self.colors['accent'])
+            self.analyze_stop_btn.config(state='disabled')
+            self.stop_batch_analysis = False
             self.progress_var.set(0)
         
     # Training Methods
@@ -1184,6 +1458,14 @@ class DriveOSGUI:
         """Run automatic labeling with progress tracking"""
         try:
             import cv2
+            import sys
+            from pathlib import Path
+            
+            # Add scripts directory to path
+            scripts_dir = Path(__file__).parent.parent / 'scripts'
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+            
             from auto_label_track import AutoTrackLabeler
             
             # Get total frames for progress calculation
@@ -1382,6 +1664,11 @@ class DriveOSGUI:
             
     def start_training(self):
         """Start model training"""
+        # Create models directory first to prevent access errors
+        from pathlib import Path
+        models_dir = Path('models')
+        models_dir.mkdir(parents=True, exist_ok=True)
+        
         data_dir = self.training_data_var.get()
         
         if not Path(data_dir).exists():
@@ -1434,7 +1721,9 @@ class DriveOSGUI:
                 self.refine_training_data()
                 return
         
+        self.stop_training = False
         self.train_btn.config(state='disabled')
+        self.train_stop_btn.config(state='normal', bg='#d13438')
         self.training_status_label.config(text="Preparing to train...")
         self.log_training("="*50)
         self.log_training("Starting model training...")
@@ -1444,6 +1733,13 @@ class DriveOSGUI:
         thread = threading.Thread(target=self.training_thread, daemon=True)
         thread.start()
         
+    def stop_training_process(self):
+        """Stop training process"""
+        self.stop_training = True
+        self.log_training("\n⏹ Stop requested - training will stop after current epoch...")
+        self.training_status_label.config(text="Stopping training...")
+        self.train_stop_btn.config(state='disabled')
+    
     def training_thread(self):
         """Background thread for training"""
         try:
@@ -1503,6 +1799,12 @@ class DriveOSGUI:
             try:
                 self.training_status_label.config(text="Training in progress...")
                 
+                # Create models directory if it doesn't exist
+                from pathlib import Path
+                models_dir = Path('models')
+                models_dir.mkdir(parents=True, exist_ok=True)
+                self.log_training(f"Output directory: {models_dir.absolute()}")
+                
                 # Set CPU threads if using CPU
                 if self.device_var.get() == 'cpu':
                     import torch
@@ -1527,11 +1829,14 @@ class DriveOSGUI:
                 self.training_progress_var.set(100)
                 
                 messagebox.showinfo(
-                    "Training Complete!",
+                    "Training Complete! 🎉",
                     "Model training finished successfully!\n\n"
-                    "The trained model has been saved to:\n"
+                    "The NEW trained model has been saved to:\n"
                     "models/racing_line_model.pth\n\n"
-                    "You can now use it to analyze videos!"
+                    "This model will now be used automatically when you:\n"
+                    "• Analyze videos in the 'Analyze Video' tab\n"
+                    "• Use live preview mode\n\n"
+                    "Your custom training data has improved the AI!"
                 )
                 
             finally:
@@ -1557,7 +1862,87 @@ class DriveOSGUI:
             
         finally:
             self.train_btn.config(state='normal')
+            self.train_stop_btn.config(state='disabled')
             self.training_progress_var.set(0)
+            self.stop_training = False
+    
+    # Annotation Methods
+    def browse_annotation_video(self):
+        """Browse for video to annotate"""
+        file_path = filedialog.askopenfilename(
+            title="Select Racing Video to Annotate",
+            filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv"), ("All files", "*.*")]
+        )
+        
+        if file_path:
+            self.annotation_video_var.set(file_path)
+            self.launch_annotation_btn.config(state='normal')
+    
+    def browse_annotation_output(self):
+        """Browse for annotation output directory"""
+        dir_path = filedialog.askdirectory(title="Select Output Directory for Annotations")
+        if dir_path:
+            self.annotation_output_var.set(dir_path)
+    
+    def launch_annotation_tool(self):
+        """Launch the interactive annotation tool"""
+        video_path = self.annotation_video_var.get()
+        output_dir = self.annotation_output_var.get()
+        
+        if video_path == "No video selected" or not video_path:
+            messagebox.showwarning("No Video", "Please select a video file first.")
+            return
+        
+        if not Path(video_path).exists():
+            messagebox.showerror("File Not Found", f"Video file not found:\n{video_path}")
+            return
+        
+        # Confirm launch
+        response = messagebox.askyesno(
+            "Launch Annotation Tool",
+            "The annotation tool will open in a new window.\n\n"
+            "Use your mouse to draw:\n"
+            "• Racing line (yellow)\n"
+            "• Track boundaries (red/blue)\n\n"
+            "Press SPACE to save each frame.\n"
+            "Press Q to quit when done.\n\n"
+            "The tool will save annotated data to:\n"
+            f"{output_dir}\n\n"
+            "Ready to launch?"
+        )
+        
+        if not response:
+            return
+        
+        # Import and run annotation tool
+        try:
+            # Test if PIL is available
+            from PIL import Image, ImageTk
+            
+            from .annotate import annotate_video
+            
+            # Run annotation tool as child window (don't hide main window)
+            try:
+                annotate_video(video_path, output_dir, parent_window=self.root)
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                messagebox.showerror("Annotation Error", 
+                                   f"Error during annotation:\n{str(e)}\n\n"
+                                   f"Please check that:\n"
+                                   f"1. PIL/Pillow is installed\n"
+                                   f"2. Video file is valid\n"
+                                   f"3. Output directory is writable\n\n"
+                                   f"Details:\n{error_details[:200]}")
+            
+        except ImportError as e:
+            messagebox.showerror("Missing Dependency", 
+                               f"PIL/Pillow is not installed.\n\n"
+                               f"Please run: pip install Pillow\n\n"
+                               f"Error: {str(e)}")
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Error", f"Failed to launch annotation tool:\n{str(e)}\n\n{traceback.format_exc()[:200]}")
             
     def log_training(self, message):
         """Add message to training log"""

@@ -6,62 +6,63 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 
-## 🚀 Quick Start - Just 3 Steps!
+## 🤖 What is DriveOS?
 
-### 📥 Installation (2-5 minutes)
+DriveOS is a **machine learning application** that trains neural networks to recognize racing lines in video footage. Unlike rule-based systems that look for specific colors or patterns, DriveOS **learns** what optimal racing lines look like by studying annotated examples.
 
-1. **Download** this repository
-   - Click the green "Code" button → "Download ZIP"
-   - Or clone: `git clone https://github.com/BrayanVillatoro/DriveOS.git`
+### How DriveOS Uses Machine Learning
 
-2. **Extract** the ZIP file to any location on your computer
+**The Training Process (Why It's ML)**
 
-3. **Double-click `INSTALL.bat`** and let it do everything!
+1. **Data Annotation** - You use the built-in annotation tool to draw racing lines and track boundaries on video frames
+   - Yellow lines = optimal racing path through corners
+   - Red/blue lines = track boundaries
+   - This creates labeled training data (input: raw frame, output: racing line mask)
 
-That's it! The installer will automatically:
-- ✅ Detect your hardware (NVIDIA GPU, CPU, etc.)
-- ✅ Install the correct PyTorch version (CUDA for NVIDIA GPUs)
-- ✅ Install all dependencies (OpenCV, NumPy, etc.)
-- ✅ Create a virtual environment
-- ✅ Create a Desktop shortcut
-- ✅ Confirm GPU support status
+2. **Neural Network Training** - DriveOS trains a DeepLabV3 model on your annotations
+   - The network has **23.8 million learnable parameters** (weights and biases)
+   - Uses **supervised learning**: compares its predictions to your annotations
+   - Calculates loss (how wrong it is) and adjusts parameters via gradient descent
+   - After 20-50 epochs, the network learns patterns: "asphalt looks like this", "racing lines follow these curves"
+   - **This is machine learning** - the model discovers features automatically, not programmed
 
-After installation completes, you'll find a **DriveOS shortcut on your Desktop**. Just double-click it to launch!
+3. **Temporal Understanding** - LSTM networks add sequential awareness
+   - Tracks the last 60 frames (~2 seconds) of racing line history
+   - Learns motion patterns: how racing lines flow through corner sequences
+   - Smooths predictions by understanding context from previous frames
+
+4. **Inference** - The trained model analyzes new footage
+   - Processes each frame through the neural network (forward pass)
+   - Outputs pixel-wise predictions: probability each pixel is part of the racing line
+   - Combines spatial (CNN) and temporal (LSTM) predictions for smooth, continuous lines
+
+**Why This is Machine Learning:**
+- **Pattern discovery** - Network finds features (track edges, racing line curvature) automatically from data
+- **Generalization** - After training on 50-100 frames, works on thousands of new frames
+- **Gradient-based optimization** - Uses backpropagation to minimize prediction error
+- **Transfer learning** - Starts with ResNet50 pre-trained on ImageNet (object recognition)
+- **Trainable** - Performance improves as you add more annotated examples
+
+## 🚀 Quick Start
+
+1. **Download** this repository (Code → Download ZIP)
+2. **Extract** to any location
+3. **Double-click `INSTALL.bat`**
+
+The installer automatically handles everything - Python environment, dependencies, GPU detection, and creates a desktop shortcut. Launch DriveOS from your desktop after installation!
 
 ### System Requirements
 
-**Minimum Requirements:**
-- **Operating System:** Windows 10 or newer (64-bit)
-- **Python:** 3.9, 3.10, or 3.11 ([Download here](https://www.python.org/downloads/))
-  - ⚠️ **IMPORTANT:** Check "Add Python to PATH" during Python installation
-- **Processor:** Intel Core i5 / AMD Ryzen 5 or better (4+ cores)
-- **RAM:** 8 GB minimum
-- **Disk Space:** 5 GB free space (for installation and models)
-- **Graphics:** Any GPU or integrated graphics (for display only)
+**Minimum:**
+- Windows 10+ (64-bit)
+- Python 3.9-3.11 ([Download](https://www.python.org/downloads/)) - **Check "Add Python to PATH"**
+- 8 GB RAM, 5 GB free space
+- Intel Core i5 / AMD Ryzen 5 (4+ cores)
 
-**Recommended for Better Performance:**
-- **Processor:** Intel Core i7/i9 or AMD Ryzen 7/9 (8+ cores, 16+ threads)
-- **RAM:** 16 GB or more
-- **Disk Space:** 10 GB+ (for training data storage)
-
-**NVIDIA GPU Acceleration (Optional but Recommended for Training):**
-- **Graphics Card:** NVIDIA GPU with CUDA support
-  - GTX 1060 6GB or better (older GPUs)
-  - RTX 2060 or better (recommended)
-  - RTX 3060 or better (great performance)
-  - RTX 4060 or better (excellent performance)
-  - RTX 5070 Ti / 5090 (requires PyTorch 2.9+ - coming soon)
-- **CUDA Compute Capability:** 3.5 or higher
-- **VRAM:** 4 GB minimum, 6 GB+ recommended
-- **Driver:** Latest NVIDIA Game Ready or Studio Drivers
-
-> **Note:** The installer automatically detects NVIDIA GPUs and offers CUDA installation. GPU acceleration speeds up training by 10-20x but is not required - CPU training works fine, just slower.
-
-**Why NVIDIA?**
-- **Training Speed:** GPU training is 10-20x faster than CPU
-- **Real-time Processing:** Better frame rates during live analysis
-- **Larger Models:** Can train with bigger batch sizes
-- **Native Support:** PyTorch has excellent CUDA optimization
+**Recommended:**
+- 16 GB RAM, 10 GB free space
+- Intel Core i7/i9 or AMD Ryzen 7/9 (8+ cores)
+- NVIDIA GPU (GTX 1060 6GB+, RTX 2060+) - 10-20x faster training
 
 ## ✨ Features
 
@@ -88,6 +89,28 @@ After installation completes, you'll find a **DriveOS shortcut on your Desktop**
   - Progress tracking
   - Batch video processing
 
+## 📸 Screenshots
+
+### Analyze Video
+Process racing videos and overlay the optimal racing line.
+
+![Analyze Video](readme_images/analyze-video.png)
+
+### Live Preview
+Real-time racing line analysis from video files, webcams, or screen capture.
+
+![Live Preview](readme_images/live%20view.png)
+
+### Create Training Data
+Interactive annotation tool for creating custom training datasets.
+
+![Training Data Tool](readme_images/how-to-train.png)
+
+### Train Your Model
+Train custom AI models on your own racing footage.
+
+![Model Training](readme_images/training-model.png)
+
 ## 🎮 Perfect for Sim Racing
 
 DriveOS supports **screen capture**, making it perfect for analyzing your sim racing sessions in real-time! Works with:
@@ -99,134 +122,53 @@ DriveOS supports **screen capture**, making it perfect for analyzing your sim ra
 
 ## 📖 How to Use
 
-### 1. Analyze a Video
+### Analyze Video
+1. Launch DriveOS → **"Analyze Video"** tab
+2. Select your racing video
+3. Click **"ANALYZE VIDEO WITH AI"**
+4. Get processed video with racing line overlay
 
-1. Launch DriveOS
-2. Go to the **"Analyze Video"** tab
-3. Click **"Select Video"** and choose your racing video
-4. Click **"ANALYZE VIDEO WITH AI"**
-5. Wait for processing to complete
-6. Your analyzed video will be saved with the optimal racing line highlighted!
+### Live Preview
+1. **"Live Preview"** tab → Choose source (Video, Webcam, or Screen Capture)
+2. Click **"Start Processing"** for real-time analysis
 
-### 2. Live Preview
+### Create Training Data
+1. **"Create Training Data"** tab → Select video → **"Launch Annotation Tool"**
+2. Draw racing line (yellow), left boundary (red), right boundary (blue)
+3. Press **SPACE** to save frame, **Q** when done
+4. Annotate 50-100 diverse frames for best results
 
-1. Go to the **"Live Preview"** tab
-2. Choose your source:
-   - **Video File:** Select a video to preview
-   - **Webcam/Camera:** Select camera index and test connection
-   - **Screen Capture:** Capture your sim racing gameplay in real-time
-3. Click **"Start Processing"**
-4. Watch real-time racing line analysis!
+### Train Custom Model
+1. **"Train Model"** tab → Select training data
+2. Adjust parameters (epochs, batch size, learning rate)
+3. Click **"Start Training"** (3-5 min GPU, 30-60 min CPU)
 
-### 3. Train the Model
-
-1. Go to the **"Train Model"** tab
-2. Click **"Generate Training Data"** and select a racing video
-3. Adjust training parameters (epochs, batch size, learning rate)
-4. Click **"Start Training"**
-5. Wait for training to complete (may take 30-60 minutes)
-
-## 🛠️ Manual Installation (For Developers)
-
-If you want to modify the code or contribute to the project:
+## 🛠️ Manual Installation (Developers)
 
 ```bash
-# Clone the repository
 git clone https://github.com/BrayanVillatoro/DriveOS.git
 cd DriveOS
-
-# Create virtual environment
 python -m venv .venv
+.venv\Scripts\activate
 
-# Activate virtual environment
-.venv\Scripts\activate  # Windows
+# GPU: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# CPU: pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
 
-# Install PyTorch with CUDA 11.8 (for NVIDIA GPUs)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-
-# OR install CPU-only version (slower but works on any PC)
-pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
-
-# Install other dependencies
-pip install -r requirements.txt
-
-# Launch the GUI
-python launch_gui.py
+pip install -r config/requirements.txt
+python launchers/launch_gui.py
 ```
-
-**Choosing the Right PyTorch:**
-- **CUDA 11.8:** Best for GTX 1000/RTX 2000/3000 series
-- **CUDA 12.1:** Better for RTX 4000 series
-- **CPU:** Works everywhere but ~10x slower for training
 
 ## 🧠 Technical Details
 
-### Architecture
+**Architecture:** DeepLabV3 (ResNet50) + LSTM for vision and temporal analysis
 
-- **Vision Model:** DeepLabV3 with ResNet50 backbone (pretrained on COCO)
-- **Telemetry Model:** LSTM networks for temporal sequence analysis
-- **Fusion Model:** Combines vision and telemetry predictions
-- **Training:** Supervised learning with auto-generated labels from track detection
-- **Inference Engine:** Batch processing with multi-threaded CPU or GPU acceleration
+**Performance:**
+- **CPU:** 5-10 FPS, ~100-200ms/frame, good for post-analysis
+- **GPU:** 30-60 FPS, ~15-30ms/frame, 10-20x faster training
 
-### Performance
+**Processing:** 320x320 model resolution, outputs at input resolution (720p/1080p)
 
-**CPU Mode (All PCs):**
-- ~5-10 FPS processing speed
-- ~100-200ms per frame
-- Uses 8-16 threads for parallel processing
-- Good for post-session analysis
 
-**GPU Mode (NVIDIA GPUs):**
-- ~30-60 FPS processing speed
-- ~15-30ms per frame
-- 10-20x faster training
-- Excellent for real-time analysis
-
-**Processing:**
-- **Input Resolution:** 1920x1080 or 1280x720
-- **Model Resolution:** 320x320 (optimized for speed)
-- **Batch Size:** Adjustable (2-16 depending on VRAM/RAM)
-- **Output:** Same resolution as input with overlays
-
-### Files & Directories
-
-```
-DriveOS/
-├── INSTALL.bat          # Quick installer launcher
-├── installer.py         # Installation wizard
-├── launch_gui.py        # GUI launcher
-├── DriveOS.bat         # Direct launcher (after installation)
-├── src/
-│   ├── gui.py          # Main GUI application
-│   ├── inference.py    # Inference engine
-│   ├── models.py       # ML model architectures
-│   ├── train.py        # Training script
-│   └── config.py       # Configuration
-├── models/             # Trained model weights
-├── data/
-│   └── training/       # Training data
-└── requirements.txt    # Python dependencies
-```
-
-## 🎯 GPU vs CPU: What to Expect
-
-**CPU Training (No NVIDIA GPU):**
-- Training 20 epochs: ~30-60 minutes
-- Processing 1 hour of video: ~10-20 minutes
-- Live preview: 5-10 FPS
-- ✅ Works on any PC
-- ✅ No special hardware needed
-
-**GPU Training (NVIDIA GPU with CUDA):**
-- Training 20 epochs: ~3-5 minutes (10-20x faster)
-- Processing 1 hour of video: ~1-2 minutes
-- Live preview: 30-60 FPS
-- ✅ Much faster training
-- ✅ Real-time analysis possible
-- ⚠️ Requires NVIDIA GPU (GTX 1060+)
-
-**Recommendation:** Start with CPU mode to learn the software. If you plan to train frequently or need real-time analysis, NVIDIA GPU is highly recommended.
 
 ## 📄 License
 
@@ -238,56 +180,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🐛 Troubleshooting
 
-### "Python not found" error
-- Install Python 3.9-3.11 from [python.org](https://www.python.org/downloads/)
-- Make sure to check "Add Python to PATH" during installation
+- **"Python not found":** Install Python 3.9-3.11, check "Add Python to PATH"
+- **Installation fails:** Run as Administrator, check internet connection
+- **Slow processing:** Close other apps, consider NVIDIA GPU for 10-20x speedup
 
-### Installation fails
-- Run `INSTALL.bat` as Administrator
-- Make sure you have internet connection
-- Check that you have ~2 GB free disk space
+## 📧 Support & Contributing
 
-### Screen capture not working
-- Install screen capture support: The installer will prompt you
-- Or manually: `pip install mss`
-
-### Slow processing
-- Processing speed depends on your CPU
-- Close other applications during processing
-- Consider upgrading to a multi-core CPU (16+ threads recommended)
-
-## 📧 Support
-
-For issues, questions, or suggestions:
-- Open an issue on [GitHub](https://github.com/BrayanVillatoro/DriveOS/issues)
-- Check existing issues for solutions
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+- Issues/questions: [GitHub Issues](https://github.com/BrayanVillatoro/DriveOS/issues)
+- Contributions welcome via Pull Requests
 
 ---
 
-Made with ❤️ for the racing community
-
-## 🙏 Acknowledgments
-
-- **PyTorch** - Deep learning framework and CUDA support
-- **OpenCV** - Computer vision and video processing
-- **NVIDIA** - CUDA and GPU acceleration technology
-- **DeepLab** - Semantic segmentation architecture
-
-## 🗺️ Roadmap
-
-- [ ] Pre-trained models for common tracks
-- [ ] Multi-car comparison and analysis
-- [ ] Track database with optimal lines
-- [ ] Enhanced real-time processing
-- [ ] Mobile companion app
-- [ ] Cloud-based training
-- [ ] Advanced telemetry integration
-- [ ] Multi-session comparison tools
-
----
-
-**DriveOS** - Drive faster, smarter, better. 🏁
+Made with ❤️ for the racing community | **DriveOS** - Drive faster, smarter, better 🏁
