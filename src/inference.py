@@ -341,7 +341,11 @@ class InferenceEngine:
         try:
             rle = RacingLineEstimator()
             # seg_map is already resized to frame size (w, h)
-            centerline_pts = rle.extract_centerline_from_segmentation(seg_map.astype(np.int32))
+            centerline_pts = rle.extract_centerline_from_segmentation(
+                seg_map.astype(np.int32),
+                bias_to_inner=getattr(config, 'BIAS_TO_INNER', True),
+                bias_strength=float(getattr(config, 'BIAS_STRENGTH', 0.35))
+            )
             if centerline_pts is not None and centerline_pts.shape[0] >= 8:
                 # Smooth with a light spline fit and render
                 try:

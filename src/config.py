@@ -69,6 +69,10 @@ class Config:
     # Geometry/Calibration
     HOMOGRAPHY_PATH: str = os.getenv("HOMOGRAPHY_PATH", "")
     LIVE_OPTIMIZE_EVERY_N: int = int(os.getenv("LIVE_OPTIMIZE_EVERY_N", "8"))
+    # Centerline biasing towards inner edge in corners
+    # Default off to ensure immediate stability; can be enabled per track
+    BIAS_TO_INNER: bool = os.getenv("BIAS_TO_INNER", "false").lower() == "true"
+    BIAS_STRENGTH: float = float(os.getenv("BIAS_STRENGTH", "0.35"))  # fraction of half-width
 
     # Training augmentation parameters
     RACING_LINE_DILATE_KERNEL: int = int(os.getenv("RACING_LINE_DILATE_KERNEL", "7"))

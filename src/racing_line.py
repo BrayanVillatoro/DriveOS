@@ -19,7 +19,8 @@ class RacingLineEstimator:
         )
 
     def extract_centerline_from_segmentation(self, seg_map: np.ndarray, class_track: int = 0,
-                                             sample_every_n_rows: int = 6, min_width: int = 10) -> np.ndarray:
+                                             sample_every_n_rows: int = 6, min_width: int = 10,
+                                             bias_to_inner: bool = True, bias_strength: float = 0.35) -> np.ndarray:
         """
         Extract a centerline (Nx2 pixel coordinates) from a segmentation map.
 
@@ -53,6 +54,7 @@ class RacingLineEstimator:
         comp_mask = (labels == largest_idx).astype(np.uint8)
 
         points = []
+        widths = []
         ys = np.arange(0, h, sample_every_n_rows)
         for y in ys:
             row = comp_mask[y, :]
@@ -63,20 +65,65 @@ class RacingLineEstimator:
                 continue
             # center by mean to cope with non-symmetric shapes
             center_x = float(xs.mean())
+            width = float(xs.max() - xs.min())
             points.append((center_x, float(y)))
+            widths.append(width)
 
         if len(points) < 4:
             # not enough points for spline smoothing, return raw points
             return np.array(points, dtype=np.float32)
 
         pts = np.array(points)
+        widths = np.array(widths) if len(widths) == len(pts) else np.full(len(pts), 0.0)
         # smooth with low-order spline to remove jitter
         try:
             from scipy.interpolate import splprep, splev
             tck, u = splprep([pts[:, 0], pts[:, 1]], s=2.0)
             u_fine = np.linspace(0, 1, max(200, len(pts) * 10))
             x_s, y_s = splev(u_fine, tck)
-            return np.vstack([x_s, y_s]).T.astype(np.float32)
+            smooth = np.vstack([x_s, y_s]).T.astype(np.float32)
+            if not bias_to_inner:
+                return smooth
+
+            # Estimate turn direction locally and bias center towards inner edge
+            # Compute curvature sign from spline derivatives
+            dx, dy = splev(u_fine, tck, der=1)
+            ddx, ddy = splev(u_fine, tck, der=2)
+            curv_signed = (dx * ddy - dy * ddx) / (dx**2 + dy**2 + 1e-8)
+            # guard against NaNs/Infs
+            curv_signed = np.nan_to_num(curv_signed, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # Map each original sampled y to closest u index
+            # Then compute biased center using half-width and curvature sign
+            biased_pts = []
+            # Bound widths to reasonable range to avoid huge shifts from bad masks
+            widths = np.clip(widths, 0.0, max(w * 0.9, 1.0))
+            half_widths = widths * 0.5
+            for (cx, yy), hw in zip(pts, half_widths):
+                # nearest index in y_s
+                idx = int(np.argmin(np.abs(y_s - yy)))
+                turn_sign = np.sign(curv_signed[idx])  # + left, - right in image coordinates
+                # If width is very small or no clear turn, skip bias
+                if hw < 4.0 or turn_sign == 0.0:
+                    bx = cx
+                else:
+                    # shift center towards inner edge by bias_strength * half_width, capped
+                    max_shift = hw * 0.6
+                    shift = np.clip(bias_strength * hw, 0.0, max_shift)
+                    bx = cx - turn_sign * shift
+                # keep inside image
+                bx = float(np.clip(bx, 0.0, float(w - 1)))
+                biased_pts.append((bx, yy))
+
+            biased_pts = np.array(biased_pts, dtype=np.float32)
+            # re-spline biased points for a smooth final centerline
+            try:
+                tck_b, _ = splprep([biased_pts[:, 0], biased_pts[:, 1]], s=2.0)
+                x_b, y_b = splev(np.linspace(0, 1, len(u_fine)), tck_b)
+                return np.vstack([x_b, y_b]).T.astype(np.float32)
+            except Exception:
+                # fallback to lightly smoothed polyline
+                return cv2.GaussianBlur(biased_pts.astype(np.float32), (1, 1), 0)
         except Exception:
             return pts.astype(np.float32)
 
