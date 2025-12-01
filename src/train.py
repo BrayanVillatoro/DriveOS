@@ -80,8 +80,23 @@ class RacingLineDataset(Dataset):
         image = cv2.resize(image, target_size)
         mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
         
-        # Clamp mask values to valid range (0-2: background, racing line, boundaries)
-        # This handles cases where masks may have invalid pixel values
+        # Merge edge class (3) into track (0) if configured to reduce fragmentation
+        if getattr(config, 'MERGE_EDGE_INTO_TRACK', True):
+            mask[mask == 3] = 0
+        # Keep only classes 0,1,2 (track, racing_line, off_track). Curbs (4) -> track.
+        mask[mask == 4] = 0
+        # Dilation of racing line to increase pixel footprint (improves class balance)
+        if (mask == 1).sum() > 0:
+            k = int(getattr(config, 'RACING_LINE_DILATE_KERNEL', 7))
+            if k > 1:
+                try:
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+                    rl = (mask == 1).astype(np.uint8)
+                    rl_dil = cv2.dilate(rl, kernel, iterations=1)
+                    mask[(rl_dil > 0)] = 1
+                except Exception:
+                    pass
+        # Clamp remaining values to 0..2 range
         mask = np.clip(mask, 0, 2)
         
         # Extract racing line point from mask (class 1)
@@ -175,7 +190,15 @@ def train_model(data_dir: str,
     )
     
     # Loss functions
-    criterion_seg = nn.CrossEntropyLoss()
+    # Class weights (track, racing_line, off_track) to compensate imbalance
+    try:
+        weights = [float(x) for x in getattr(config, 'CLASS_WEIGHTS', '0.2,5.0,1.0').split(',')]
+        if len(weights) != 3:
+            raise ValueError
+        weight_tensor = torch.tensor(weights, dtype=torch.float32).to(device)
+        criterion_seg = nn.CrossEntropyLoss(weight=weight_tensor)
+    except Exception:
+        criterion_seg = nn.CrossEntropyLoss()
     criterion_line = nn.MSELoss()
     
     # Training loop

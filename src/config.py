@@ -69,6 +69,11 @@ class Config:
     # Geometry/Calibration
     HOMOGRAPHY_PATH: str = os.getenv("HOMOGRAPHY_PATH", "")
     LIVE_OPTIMIZE_EVERY_N: int = int(os.getenv("LIVE_OPTIMIZE_EVERY_N", "8"))
+
+    # Training augmentation parameters
+    RACING_LINE_DILATE_KERNEL: int = int(os.getenv("RACING_LINE_DILATE_KERNEL", "7"))
+    MERGE_EDGE_INTO_TRACK: bool = os.getenv("MERGE_EDGE_INTO_TRACK", "true").lower() == "true"
+    CLASS_WEIGHTS: str = os.getenv("CLASS_WEIGHTS", "0.2,5.0,1.0")  # track,racing_line,off_track
     
     @classmethod
     def get_device(cls):
