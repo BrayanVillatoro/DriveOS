@@ -18,6 +18,7 @@ import time
 
 from .inference import BatchProcessor
 from .train import train_model
+from .temporal_fusion import TemporalFusion
 
 
 class DriveOSGUI:
@@ -78,6 +79,8 @@ class DriveOSGUI:
         self.processor = None
         self.frame_queue = queue.Queue(maxsize=1)
         self.stop_processing = False
+        # Precomputed optimized spline (pixel coords Nx2)
+        self.precomputed_pts_px = None
         self.available_cameras = []
         
         # Create main layout
@@ -308,6 +311,11 @@ class DriveOSGUI:
                                    command=self.stop_live_processing,
                                    state='disabled')
         self.stop_btn.pack(side='left', padx=5)
+
+        # Load optimized line (manual) so user can overlay an offline spline
+        self.load_line_btn = ttk.Button(controls, text="📂 Load Optimized Line",
+                        command=self.load_optimized_line)
+        self.load_line_btn.pack(side='left', padx=5)
         
         # Info panel
         info_frame = ttk.LabelFrame(self.live_tab, text="Real-time Statistics", padding=10)
@@ -974,6 +982,9 @@ Right Click        - Undo last point
         cap = None
         try:
             processor = BatchProcessor('models/racing_line_model.pth')
+
+            # temporal fusion helper for recent centerlines
+            fusion = TemporalFusion(maxlen=8)
             
             # Determine capture source
             source_type = self.source_type_var.get()
@@ -1053,6 +1064,46 @@ Right Click        - Undo last point
             
             # Standard video/camera processing loop
             frame_count = 0
+            # Attempt one-time automatic extraction of a precomputed spline from the first frame
+            pts_px = None
+            rle = None
+            try:
+                # Grab a single sample frame (may consume one camera frame)
+                ret_sample, sample_frame = cap.read()
+                if ret_sample:
+                    try:
+                        pred0 = processor.engine.predict(sample_frame, None)
+                        seg_small = pred0['segmentation']
+                        h, w = sample_frame.shape[:2]
+                        seg_resized = cv2.resize(seg_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                        rle = __import__('src.racing_line', fromlist=['RacingLineEstimator']).RacingLineEstimator()
+                        pts_auto_px = rle.extract_centerline_from_segmentation(seg_resized)
+                        if pts_auto_px is not None and len(pts_auto_px) > 4:
+                            # Attempt a quick optimization with small iterations to improve the path
+                            try:
+                                spline, curvature, arc, speed, opt_res = rle.optimize_racing_line(pts_auto_px, n_control=8, maxiter=60)
+                                pts_px = np.vstack([spline[0], spline[1]]).T
+                                # If user hasn't provided a precomputed spline, store this auto-optimized one
+                                if getattr(self, 'precomputed_pts_px', None) is None:
+                                    self.precomputed_pts_px = pts_px
+                                # Log optimization result
+                                try:
+                                    self.log_training(f"Auto-optimized spline ready (success={opt_res.success})")
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pts_px = pts_auto_px
+                    except Exception:
+                        pts_px = None
+                else:
+                    # If we couldn't grab a sample, reset cap position if video
+                    try:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    except Exception:
+                        pass
+            except Exception:
+                pts_px = None
+
             while not self.stop_processing and cap.isOpened():
                 ret, frame = cap.read()
                 if not ret:
@@ -1064,6 +1115,47 @@ Right Click        - Undo last point
                 # Process frame
                 prediction = processor.engine.predict(frame, None)
                 result_frame = processor.engine.visualize_prediction(frame, prediction)
+
+                # Temporal fusion: try to extract per-frame centerline and add to buffer
+                try:
+                    seg_small = prediction.get('segmentation', None)
+                    if seg_small is not None:
+                        h, w = frame.shape[:2]
+                        seg_resized = cv2.resize(seg_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                        try:
+                            rle_local = rle if 'rle' in locals() and rle is not None else __import__('src.racing_line', fromlist=['RacingLineEstimator']).RacingLineEstimator()
+                        except Exception:
+                            rle_local = __import__('src.racing_line', fromlist=['RacingLineEstimator']).RacingLineEstimator()
+                        pts_frame = rle_local.extract_centerline_from_segmentation(seg_resized)
+                        if pts_frame is not None and pts_frame.shape[0] >= 8:
+                            fusion.add_centerline(pts_frame)
+
+                except Exception:
+                    pass
+
+                # If we have a stable aggregation, use it (user-provided spline always takes precedence)
+                pts_to_overlay = None
+                if getattr(self, 'precomputed_pts_px', None) is not None:
+                    pts_to_overlay = self.precomputed_pts_px
+                else:
+                    agg = fusion.get_average_centerline(num=600)
+                    if agg is not None and agg.shape[0] >= 8:
+                        try:
+                            # run a light optimization on the aggregated centerline to smooth offsets
+                            spline, curvature, arc, speed, opt_res = rle_local.optimize_racing_line(agg, n_control=10, maxiter=80)
+                            pts_to_overlay = np.vstack([spline[0], spline[1]]).T
+                        except Exception:
+                            pts_to_overlay = agg
+
+                if pts_to_overlay is not None:
+                    try:
+                        if rle is None:
+                            rle = __import__('src.racing_line', fromlist=['RacingLineEstimator']).RacingLineEstimator()
+                        if isinstance(pts_to_overlay, np.ndarray) and pts_to_overlay.ndim == 2 and pts_to_overlay.shape[1] == 2:
+                            speed_placeholder = np.linspace(1.0, 1.0, pts_to_overlay.shape[0])
+                            result_frame = rle.overlay_racing_line(result_frame, (pts_to_overlay[:, 0], pts_to_overlay[:, 1]), speed_placeholder)
+                    except Exception:
+                        pass
                 
                 # Convert to RGB for display
                 result_frame = cv2.cvtColor(result_frame, cv2.COLOR_BGR2RGB)
@@ -1126,20 +1218,160 @@ Right Click        - Undo last point
         # Schedule next update
         if self.is_processing:
             self.root.after(30, self.update_live_display)
-        
-    # Upload Methods
-    def browse_video(self):
-        """Browse for video file"""
+
+    def load_optimized_line(self):
+        """Load an offline-optimized racing line (CSV or NPY) and use it for live overlay"""
         file_path = filedialog.askopenfilename(
-            title="Select Racing Video File",
+            title="Load Optimized Line",
+            filetypes=[("NumPy (.npy/.npz)", "*.npy *.npz"), ("CSV (.csv)", "*.csv"), ("All files", "*.*")]
+        )
+        if not file_path:
+            return
+
+        # Try to estimate an image reference size from available sample frames
+        sample_img = None
+        sample_path = 'data/user_annotations/images/frame_000000.jpg'
+        if os.path.exists(sample_path):
+            sample_img = cv2.imread(sample_path)
+        else:
+            folder = 'data/user_annotations/images'
+            if os.path.isdir(folder):
+                files = [f for f in os.listdir(folder) if f.lower().endswith(('.jpg', '.png'))]
+                if files:
+                    sample_img = cv2.imread(os.path.join(folder, files[0]))
+
+        if sample_img is not None:
+            img_h, img_w = sample_img.shape[:2]
+        else:
+            img_w, img_h = 1280, 720
+
+        try:
+            pts = self._detect_and_convert_points(file_path, (img_h, img_w))
+            if pts is None or not (isinstance(pts, np.ndarray) and pts.ndim == 2 and pts.shape[1] == 2):
+                raise ValueError('Failed to interpret spline file into Nx2 pixel coordinates')
+
+            self.precomputed_pts_px = pts
+            self.live_status.config(text=f"Loaded optimized line: {os.path.basename(file_path)}")
+            messagebox.showinfo("Loaded", f"Optimized line loaded: {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load optimized line:\n{str(e)}")
+
+    def _detect_and_convert_points(self, file_path, img_shape):
+        """Load a spline file and try several common coordinate formats.
+
+        Tries:
+        - Pixel coordinates (N,2)
+        - Normalized 0..1 coordinates -> pixels
+        - Normalized -1..1 -> map to pixels
+        - (y,x) swapped variants of above
+
+        Returns an (N,2) float ndarray in pixel coordinates or None.
+        """
+        # load array
+        try:
+            if file_path.lower().endswith('.npy') or file_path.lower().endswith('.npz'):
+                arr = np.load(file_path, allow_pickle=True)
+                if isinstance(arr, np.lib.npyio.NpzFile):
+                    keys = list(arr.keys())
+                    if not keys:
+                        return None
+                    pts = arr[keys[0]]
+                else:
+                    pts = arr
+            else:
+                pts = np.loadtxt(file_path, delimiter=',')
+        except Exception:
+            return None
+
+        pts = np.asarray(pts, dtype=np.float64)
+        if pts.ndim != 2:
+            return None
+
+        h, w = img_shape
+
+        candidates = []
+
+        def push_candidate(a, descr):
+            a = np.asarray(a, dtype=np.float64)
+            if a.ndim != 2 or a.shape[1] != 2:
+                return
+            candidates.append((a, descr))
+
+        # direct (assume (N,2) pixel coords)
+        push_candidate(pts, 'pixels')
+
+        # swapped (y,x)
+        push_candidate(pts[:, ::-1], 'swapped')
+
+        # normalized 0..1
+        if np.nanmax(np.abs(pts)) <= 1.01:
+            push_candidate(np.column_stack([pts[:, 0] * w, pts[:, 1] * h]), 'norm_0_1')
+            push_candidate(np.column_stack([pts[:, 1] * w, pts[:, 0] * h]), 'norm_0_1_swapped')
+
+        # normalized -1..1
+        if np.nanmax(np.abs(pts)) <= 1.01 + 1e-6:
+            # also try mapping -1..1 -> 0..1
+            push_candidate(np.column_stack([((pts[:, 0] + 1) / 2.0) * w, ((pts[:, 1] + 1) / 2.0) * h]), 'norm_m1_1')
+            push_candidate(np.column_stack([((pts[:, 1] + 1) / 2.0) * w, ((pts[:, 0] + 1) / 2.0) * h]), 'norm_m1_1_swapped')
+
+        # If points look large/small, also try interpreting as already pixel but maybe transposed
+        if pts.shape[0] == 2 and pts.shape[1] != 2:
+            # e.g., shape (2,N)
+            arr_t = pts.T
+            push_candidate(arr_t, 'transpose')
+            push_candidate(arr_t[:, ::-1], 'transpose_swapped')
+
+        # scoring: prefer candidates with mean y located within lower half of the image (typical racing line)
+        best = None
+        best_score = -1e9
+        for a, descr in candidates:
+            if np.isnan(a).any() or np.isinf(a).any():
+                continue
+            if a.shape[0] < 4:
+                continue
+            # basic bounds check
+            minx, maxx = a[:, 0].min(), a[:, 0].max()
+            miny, maxy = a[:, 1].min(), a[:, 1].max()
+            if maxx - minx < 2 or maxy - miny < 2:
+                continue
+            # score components
+            cx = a[:, 0].mean()
+            cy = a[:, 1].mean()
+            # prefer cy in [0.2*h, 0.95*h]
+            cy_score = 1.0 - abs((cy / h) - 0.5)
+            # prefer x spread across image width
+            xspread = (maxx - minx) / float(w)
+            score = cy_score + 0.5 * xspread
+            # penalize if many points outside image bounds
+            outside = ((a[:, 0] < -5) | (a[:, 0] > w + 5) | (a[:, 1] < -5) | (a[:, 1] > h + 5)).mean()
+            score = score - (outside * 2.0)
+            if score > best_score:
+                best_score = score
+                best = (a, descr, score)
+
+        if best is None:
+            return None
+
+        chosen, descr, sc = best
+        return chosen.astype(np.float32)
+
+    def browse_video(self):
+        """Browse and select a racing video file for analysis"""
+        file_path = filedialog.askopenfilename(
+            title="Select Racing Video",
             filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv"), ("All files", "*.*")]
         )
-        
         if file_path:
             self.file_path_var.set(f"✓ Selected: {file_path}")
-            self.process_btn.config(state='normal', bg=self.colors['accent'])
-            self.progress_label.config(text="✓ Ready to analyze! Click the button above.")
-            
+            try:
+                self.process_btn.config(state='normal', bg=self.colors['accent'])
+            except Exception:
+                pass
+            try:
+                self.progress_label.config(text="✓ Ready to analyze! Click the button above.")
+            except Exception:
+                pass
+
     def browse_output(self):
         """Browse for output directory"""
         dir_path = filedialog.askdirectory(title="Select Output Directory")

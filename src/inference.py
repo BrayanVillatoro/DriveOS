@@ -10,11 +10,14 @@ from threading import Thread
 import time
 import logging
 import os
+import glob
+import matplotlib.pyplot as plt
 
 from .models import RacingLineOptimizer
 from .video_processor import VideoProcessor
 from .telemetry_processor import TelemetryProcessor, TelemetryPoint
 from .config import config
+from .racing_line import RacingLineEstimator, plot_debug_track
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +44,31 @@ class InferenceEngine:
             try:
                 logger.info(f"📦 Loading model from: {model_path}")
                 logger.info(f"🖥️  Using device: {self.device}")
-                checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
-                self.model.load_state_dict(checkpoint['model_state_dict'])
+                # Load checkpoint robustly: support full checkpoint dicts, plain state_dicts,
+                # and checkpoints saved from DataParallel (with 'module.' prefixes).
+                checkpoint = torch.load(model_path, map_location=self.device)
+                # Determine if checkpoint is a full dict with named keys
+                if isinstance(checkpoint, dict):
+                    if 'model_state_dict' in checkpoint:
+                        state = checkpoint['model_state_dict']
+                    elif 'state_dict' in checkpoint:
+                        state = checkpoint['state_dict']
+                    else:
+                        # Might already be a state_dict
+                        state = checkpoint
+                else:
+                    # checkpoint is likely a state_dict already
+                    state = checkpoint
+
+                # Try loading state dict; if keys are prefixed with 'module.' (DataParallel), strip it.
+                try:
+                    self.model.load_state_dict(state)
+                except RuntimeError:
+                    fixed_state = {}
+                    for k, v in state.items():
+                        new_k = k.replace('module.', '') if k.startswith('module.') else k
+                        fixed_state[new_k] = v
+                    self.model.load_state_dict(fixed_state)
                 logger.info(f"✓ Model loaded successfully from {model_path}")
             except FileNotFoundError:
                 logger.warning(
@@ -176,6 +202,8 @@ class InferenceEngine:
             self.telemetry_buffer.append(telemetry)
             if len(self.telemetry_buffer) > self.buffer_size:
                 self.telemetry_buffer.pop(0)
+
+        
         
         # Preprocess inputs
         image_tensor = self.preprocess_image(frame)
@@ -193,12 +221,36 @@ class InferenceEngine:
         confidence_np = confidence[0, 0].cpu().numpy()
         optimal_line_np = optimal_line[0].cpu().numpy()
         
-        # Update segmentation file saving to use a dedicated folder
+
+        # Optionally save segmentation debug maps (controlled via config to avoid uncontrolled growth)
         segmentation_dir = os.path.join(config.LOGS_DIR, "segmentation_maps")
-        os.makedirs(segmentation_dir, exist_ok=True)
-        seg_map_debug_path = os.path.join(segmentation_dir, f"segmentation_map_debug_{time.time()}.png")
-        cv2.imwrite(seg_map_debug_path, seg_map_np.astype(np.uint8) * 85)  # Scale classes for visibility
-        logger.info(f"Saved raw segmentation map for validation: {seg_map_debug_path}")
+        # Use a per-engine counter to control save frequency
+        if not hasattr(self, '_predict_count'):
+            self._predict_count = 0
+        self._predict_count += 1
+
+        if getattr(config, 'SAVE_SEGMENTATION_MAPS', False):
+            if self._predict_count % max(1, config.SEGMENTATION_SAVE_FREQ) == 0:
+                os.makedirs(segmentation_dir, exist_ok=True)
+                seg_map_debug_path = os.path.join(segmentation_dir, f"segmentation_map_debug_{int(time.time()*1000)}.png")
+                cv2.imwrite(seg_map_debug_path, seg_map_np.astype(np.uint8) * 85)
+                logger.info(f"Saved raw segmentation map for validation: {seg_map_debug_path}")
+
+                # Prune old segmentation files if we exceed the configured maximum
+                try:
+                    max_files = int(getattr(config, 'SEGMENTATION_MAX_FILES', 0))
+                    if max_files > 0:
+                        files = sorted(glob.glob(os.path.join(segmentation_dir, '*.png')), key=os.path.getmtime)
+                        while len(files) > max_files:
+                            try:
+                                os.remove(files[0])
+                                logger.debug(f"Pruned old segmentation map: {files[0]}")
+                                files.pop(0)
+                            except Exception:
+                                # If a file was removed by another process or locked, skip it
+                                files = sorted(glob.glob(os.path.join(segmentation_dir, '*.png')), key=os.path.getmtime)
+                except Exception as e:
+                    logger.warning(f"Failed to prune segmentation debug files: {e}")
         
         # Add debugging code to log class mapping
         logger.info("Class mapping validation:")
@@ -273,10 +325,7 @@ class InferenceEngine:
         if np.isnan(opt_x) or np.isnan(opt_y):
             opt_x, opt_y = 0.0, 0.0
         
-        # Add small random variation for testing (remove when model works properly)
-        import random
-        opt_x += random.uniform(-0.1, 0.1)
-        opt_y += random.uniform(-0.1, 0.1)
+        # (Removed debug random jitter. Use raw model outputs for smoother, consistent predictions.)
         
         # Clamp to [-1, 1] range
         opt_x = max(-1.0, min(1.0, opt_x))
@@ -302,32 +351,38 @@ class InferenceEngine:
         mask_value = int(track_mask[scaled_y, scaled_x])
         logger.info(f"Debug: Confidence={conf_val:.2f}, Mask Value={mask_value}, Scaled Point=({scaled_x},{scaled_y}), Frame Point=({point_x},{point_y})")
         if conf_val > confidence_threshold and mask_value == 1:
-            self.racing_line_buffer.append((point_x, point_y))
+            # Only append if sufficiently far from last point to avoid tight clustering
+            min_pixel_dist = 12
+            if not self.racing_line_buffer:
+                self.racing_line_buffer.append((float(point_x), float(point_y)))
+            else:
+                last = self.racing_line_buffer[-1]
+                dist = np.hypot(point_x - last[0], point_y - last[1])
+                if dist >= min_pixel_dist:
+                    self.racing_line_buffer.append((float(point_x), float(point_y)))
+                else:
+                    # slightly nudge last point towards the new predicted point (small smoothing)
+                    lr = 0.5
+                    newx = lr * point_x + (1 - lr) * last[0]
+                    newy = lr * point_y + (1 - lr) * last[1]
+                    self.racing_line_buffer[-1] = (float(newx), float(newy))
 
         # Limit buffer size for smoother visualization
         max_buffer_size = 20
         if len(self.racing_line_buffer) > max_buffer_size:
             self.racing_line_buffer = self.racing_line_buffer[-max_buffer_size:]
 
-        # Apply moving average smoothing to buffer points for a continuous racing line
+        # Apply exponential smoothing to reduce jitter while preserving responsiveness
         smoothed_buffer = []
-        window_size = 5
-        for i in range(len(self.racing_line_buffer)):
-            start = max(0, i - window_size + 1)
-            window = self.racing_line_buffer[start:i+1]
-            avg_x = int(np.mean([pt[0] for pt in window]))
-            avg_y = int(np.mean([pt[1] for pt in window]))
-            smoothed_buffer.append((avg_x, avg_y))
-
-        # Further increase smoothing window
-        window_size = 8
-        smoothed_buffer = []
-        for i in range(len(self.racing_line_buffer)):
-            start = max(0, i - window_size + 1)
-            window = self.racing_line_buffer[start:i+1]
-            avg_x = int(np.mean([pt[0] for pt in window]))
-            avg_y = int(np.mean([pt[1] for pt in window]))
-            smoothed_buffer.append((avg_x, avg_y))
+        alpha = 0.4
+        for i, pt in enumerate(self.racing_line_buffer):
+            if i == 0:
+                smoothed_buffer.append((float(pt[0]), float(pt[1])))
+            else:
+                prev = smoothed_buffer[-1]
+                sx = alpha * float(pt[0]) + (1 - alpha) * prev[0]
+                sy = alpha * float(pt[1]) + (1 - alpha) * prev[1]
+                smoothed_buffer.append((sx, sy))
 
         # Spline interpolation for even smoother curve
         try:
@@ -382,16 +437,24 @@ class InferenceEngine:
 
 
 class RealtimeProcessor:
-    """Process video and telemetry in real-time"""
-    
-    def __init__(self, model_path: str):
+    """Process video and telemetry in real-time
+
+    Optional quick-fix: pass a precomputed spline (pixel coordinates) to overlay
+    the ideal racing line in live preview. This lets users display the full
+    lap-optimized line even when the segmentation model does not produce a
+    visible racing-line class.
+    """
+
+    def __init__(self, model_path: str, precomputed_spline_px: Optional[np.ndarray] = None):
         """
         Initialize real-time processor
-        
+
         Args:
             model_path: Path to model weights
+            precomputed_spline_px: Optional Nx2 array of pixel coordinates to overlay each frame
         """
         self.engine = InferenceEngine(model_path)
+        self.precomputed_spline_px = precomputed_spline_px
         self.frame_queue = Queue(maxsize=10)
         self.result_queue = Queue(maxsize=10)
         self.telemetry_queue = Queue(maxsize=100)
@@ -456,6 +519,18 @@ class RealtimeProcessor:
                 
                 # Visualize
                 result_frame = self.engine.visualize_prediction(frame, prediction)
+
+                # Overlay precomputed spline if provided (quick live overlay option)
+                if self.precomputed_spline_px is not None:
+                    try:
+                        pts_arr = np.asarray(self.precomputed_spline_px)
+                        if pts_arr.ndim == 2 and pts_arr.shape[1] == 2 and pts_arr.shape[0] > 1:
+                            # Create a simple speed array placeholder so the overlay function can color by speed
+                            speed_placeholder = np.linspace(1.0, 1.0, pts_arr.shape[0])
+                            rle = RacingLineEstimator()
+                            result_frame = rle.overlay_racing_line(result_frame, (pts_arr[:, 0], pts_arr[:, 1]), speed_placeholder)
+                    except Exception as e:
+                        logger.warning(f"Could not overlay precomputed spline: {e}")
                 
                 # Put result in output queue
                 if not self.result_queue.full():
@@ -490,6 +565,12 @@ class BatchProcessor:
     
     def process_video(self, video_path: str, output_path: str,
                      telemetry_path: Optional[str] = None,
+                     centerline_path: Optional[str] = None,
+                     homography_path: Optional[str] = None,
+                     save_racing_csv: Optional[str] = None,
+                     save_fig_prefix: Optional[str] = None,
+                     optimize_racing_line: bool = False,
+                     optimize_maxiter: int = 200,
                      stop_callback: Optional[callable] = None,
                      progress_callback: Optional[callable] = None) -> Dict:
         """
@@ -545,6 +626,164 @@ class BatchProcessor:
             
             with VideoWriter(output_path, vp.target_fps, (w, h)) as writer:
                 inference_times = []
+                # Prepare optional racing line computation if a centerline CSV was provided
+                rle = None
+                pts_px = None
+                speed = None
+                was_optimized = False
+                if centerline_path:
+                    # load centerline CSV (supports header or raw two-column CSV)
+                    try:
+                        centerline = np.loadtxt(centerline_path, delimiter=',', skiprows=1)
+                    except Exception:
+                        centerline = np.loadtxt(centerline_path, delimiter=',')
+
+                    # Attempt to load homography (image->world) if provided
+                    H = None
+                    if homography_path:
+                        try:
+                            H = np.load(homography_path)
+                            logger.info(f"Loaded homography from {homography_path}")
+                        except Exception as e:
+                            logger.warning(f"Could not load homography: {e}")
+
+                    # Compute spline, curvature and speed
+                    rle = RacingLineEstimator()
+                    tck, _ = rle.fit_spline(centerline)
+                    spline_world, curvature, arc = rle.compute_curvature_and_arc_length(tck)
+                    speed = rle.compute_speed_profile(curvature, arc)
+
+                    # Optionally optimize the racing line (lap-time driven) from the centerline
+                    if optimize_racing_line:
+                        try:
+                            logger.info("Optimizing racing line for lap time (this may take a while)")
+                            spline_opt, curvature_opt, arc_opt, speed_opt, opt_res = rle.optimize_racing_line(centerline, n_control=12, maxiter=optimize_maxiter)
+                            # Replace world spline + speed with optimized one for overlay & export
+                            spline_world = spline_opt
+                            curvature = curvature_opt
+                            arc = arc_opt
+                            speed = speed_opt
+                            # Optionally save optimization result object
+                            logger.info(f"Racing line optimization finished: success={opt_res.success}, lap_time={opt_res.fun:.3f}")
+                            # remap optimized world spline to image pixels if homography available
+                            if H is not None:
+                                try:
+                                    pts_world = np.vstack([spline_world[0], spline_world[1]]).T
+                                    pts = np.hstack([pts_world, np.ones((len(pts_world), 1))])
+                                    pts_img = (np.linalg.inv(H) @ pts.T).T
+                                    pts_px = pts_img[:, :2] / pts_img[:, 2:3]
+                                except Exception as e:
+                                    logger.warning(f"Could not remap optimized world spline to pixels: {e}")
+                            else:
+                                pts_px = np.vstack([spline_world[0], spline_world[1]]).T
+                            was_optimized = True
+                        except Exception as e:
+                            logger.warning(f"Racing line optimization failed: {e}")
+
+                    # Map world->image using H inverse if homography is provided
+                    if H is not None:
+                        try:
+                            H_inv = np.linalg.inv(H)
+                            pts_world = np.vstack([spline_world[0], spline_world[1]]).T
+                            pts = np.hstack([pts_world, np.ones((len(pts_world), 1))])
+                            pts_img = (H_inv @ pts.T).T
+                            pts_px = pts_img[:, :2] / pts_img[:, 2:3]
+                            logger.info(f"Mapped {len(pts_px)} spline points world->image; x range {pts_px[:,0].min():.1f}..{pts_px[:,0].max():.1f}")
+                        except Exception as e:
+                            logger.warning(f"Error mapping world->image: {e}")
+                            pts_px = np.vstack([spline_world[0], spline_world[1]]).T
+                    else:
+                        # assume the centerline is already in pixel coordinates
+                        pts_px = np.vstack([spline_world[0], spline_world[1]]).T
+                        logger.info(f"Loaded centerline into pixel coords; {len(pts_px)} points; x range {pts_px[:,0].min():.1f}..{pts_px[:,0].max():.1f}")
+
+                    # Save CSV and plots if requested
+                    if save_racing_csv:
+                        try:
+                            header = 's_m,x_m,y_m,curvature,speed_mps'
+                            data = np.vstack([arc, spline_world[0], spline_world[1], curvature, speed]).T
+                            np.savetxt(save_racing_csv, data, delimiter=',', header=header, comments='')
+                            logger.info(f"Saved racing line samples to {save_racing_csv}")
+                        except Exception as e:
+                            logger.warning(f"Could not save racing CSV: {e}")
+
+                    if save_fig_prefix:
+                        try:
+                            # create and save static debug plot (avoid interactive display)
+                            fig, axs = plt.subplots(3, 1, figsize=(8, 14))
+                            axs[0].plot(spline_world[0], spline_world[1])
+                            axs[0].set_title('Racing Line Spline')
+                            axs[1].plot(curvature)
+                            axs[1].set_title('Curvature')
+                            axs[2].plot(speed)
+                            axs[2].set_title('Speed Profile')
+                            plt.tight_layout()
+                            fig_path = f"{save_fig_prefix}_line_speed.png"
+                            fig.savefig(fig_path, dpi=200)
+                            plt.close(fig)
+                            logger.info(f"Saved racing line debug plot to {fig_path}")
+                        except Exception as e:
+                            logger.warning(f"Could not produce debug plots: {e}")
+                # If user did not supply a centerline CSV, attempt automatic extraction
+                if centerline_path is None and first_frame is not None:
+                    try:
+                        logger.info("Attempting automatic centerline extraction from model segmentation (first frame)")
+                        pred0 = self.engine.predict(first_frame, None)
+                        seg_small = pred0['segmentation']
+                        seg_resized = cv2.resize(seg_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
+                        rle = RacingLineEstimator()
+                        pts_auto_px = rle.extract_centerline_from_segmentation(seg_resized)
+                        if pts_auto_px is not None and len(pts_auto_px) > 3:
+                            pts_px = pts_auto_px
+                            logger.info(f"Auto-extracted centerline with {len(pts_px)} points from segmentation")
+                            try:
+                                logger.info(f"Auto-extract x range: {pts_px[:,0].min():.1f}..{pts_px[:,0].max():.1f}")
+                            except Exception:
+                                pass
+
+                            # If a homography (image->world) was provided, try converting pixels -> world coords
+                            if homography_path:
+                                try:
+                                    H_img_to_world = np.load(homography_path)
+                                    pts = np.hstack([pts_px, np.ones((len(pts_px), 1))])
+                                    world_pts = (H_img_to_world @ pts.T).T
+                                    world_pts = world_pts[:, :2] / world_pts[:, 2:3]
+                                    centerline = world_pts
+                                    tck, _ = rle.fit_spline(centerline)
+                                    spline_world, curvature, arc = rle.compute_curvature_and_arc_length(tck)
+                                    speed = rle.compute_speed_profile(curvature, arc)
+                                    logger.info("Mapped extracted centerline to world coordinates and computed speed profile.")
+                                except Exception as e:
+                                    logger.warning(f"Failed mapping extracted centerline to world coords: {e}")
+                            else:
+                                # compute spline/speed using pixel-space centerline (units will be pixels)
+                                try:
+                                    tck, _ = rle.fit_spline(pts_px)
+                                    spline_world, curvature, arc = rle.compute_curvature_and_arc_length(tck)
+                                    speed = rle.compute_speed_profile(curvature, arc)
+                                    logger.info("Computed speed profile on extracted pixel-space centerline (units in px)")
+
+                                    # optionally optimize the pixel-space centerline as well
+                                    if optimize_racing_line:
+                                        try:
+                                            logger.info("Optimizing extracted pixel-space centerline (pixel units)")
+                                            spline_opt, curvature_opt, arc_opt, speed_opt, opt_res = rle.optimize_racing_line(pts_px, n_control=12, maxiter=optimize_maxiter)
+                                            spline_world = spline_opt
+                                            curvature = curvature_opt
+                                            arc = arc_opt
+                                            speed = speed_opt
+                                            logger.info(f"Pixel-space optimization finished: success={opt_res.success}, lap_time={opt_res.fun:.3f}")
+                                            # Update pts_px for overlay
+                                            pts_px = np.vstack([spline_world[0], spline_world[1]]).T
+                                            was_optimized = True
+                                        except Exception as e:
+                                            logger.warning(f"Pixel-space optimization failed: {e}")
+                                except Exception as e:
+                                    logger.warning(f"Failed computing spline/speed on extracted pixels: {e}")
+                        else:
+                            logger.warning("Automatic centerline extraction returned insufficient points; skipping overlay")
+                    except Exception as e:
+                        logger.warning(f"Automatic centerline extraction from segmentation failed: {e}")
                 
                 for frame_num, frame in vp.get_frames():
                     # Check if stop requested
@@ -563,6 +802,36 @@ class BatchProcessor:
                     
                     # Visualize and write
                     result_frame = self.engine.visualize_prediction(frame, prediction)
+
+                    # Overlay computed racing line (if available)
+                    if rle is not None and pts_px is not None:
+                        if speed is None:
+                            logger.debug("RacingLine: speed not available; skipping overlay")
+                        else:
+                            try:
+                                # Ensure enough points are inside the image bounds before drawing
+                                pts_arr = np.asarray(pts_px)
+                                inside = ((pts_arr[:, 0] >= 0) & (pts_arr[:, 0] < w) & (pts_arr[:, 1] >= 0) & (pts_arr[:, 1] < h))
+                                inside_ratio = inside.sum() / max(1, len(pts_arr))
+                                if inside_ratio < 0.1:
+                                    logger.warning(f"RacingLine: too few centerline points visible (ratio={inside_ratio:.2f}), skipping overlay")
+                                else:
+                                    spline_px = (pts_px[:, 0], pts_px[:, 1])
+                                    result_frame = rle.overlay_racing_line(result_frame, spline_px, speed)
+                                    # If optimized, draw a strong purple polyline for the optimized path (better visual cue)
+                                    if was_optimized:
+                                        try:
+                                            px = np.round(pts_px).astype(np.int32)
+                                            # only keep points inside frame
+                                            inside = ((px[:, 0] >= 0) & (px[:, 0] < w) & (px[:, 1] >= 0) & (px[:, 1] < h))
+                                            px = px[inside]
+                                            if px.shape[0] > 1:
+                                                cv2.polylines(result_frame, [px.reshape((-1, 1, 2))], isClosed=False, color=(255, 0, 255), thickness=4)
+                                        except Exception as e:
+                                            logger.warning(f"Failed drawing optimized purple line: {e}")
+                            except Exception as e:
+                                logger.warning(f"Could not overlay racing line on frame {frame_num}: {e}")
+
                     writer.write_frame(result_frame)
                     
                     stats['total_frames'] += 1

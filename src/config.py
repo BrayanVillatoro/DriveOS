@@ -59,11 +59,19 @@ class Config:
     
     # Directory Settings
     LOGS_DIR: Path = LOGS_DIR
+    # Segmentation map debug saving (disabled by default to avoid large logs)
+    SAVE_SEGMENTATION_MAPS: bool = os.getenv("SAVE_SEGMENTATION_MAPS", "false").lower() == "true"
+    # Save every N predictions when enabled
+    SEGMENTATION_SAVE_FREQ: int = int(os.getenv("SEGMENTATION_SAVE_FREQ", "30"))
+    # Maximum number of segmentation map files to keep (older files will be removed). 0 = unlimited
+    SEGMENTATION_MAX_FILES: int = int(os.getenv("SEGMENTATION_MAX_FILES", "200"))
     
     @classmethod
     def get_device(cls):
         """Get the computing device (GPU or CPU) - uses CPU for maximum compatibility"""
         import torch
+        import logging
+        logger = logging.getLogger(__name__)
         
         if not cls.USE_GPU:
             return torch.device("cpu")
@@ -75,10 +83,8 @@ class Config:
                 # Check if RTX 50 series (sm_120)
                 gpu_name = torch.cuda.get_device_name(0)
                 if "RTX 50" in gpu_name or "RTX50" in gpu_name:
-                    print(f"⚠️  {gpu_name} detected (CUDA capability 12.0)")
-                    print("   RTX 50 series support requires PyTorch 2.11+ (not yet released)")
-                    print("   Using CPU mode for now - GPU will be 10-20x faster once supported")
-                    print("   Check for updates: pip install --upgrade torch")
+                    logger.warning(f"GPU detected but unsupported: {gpu_name} (CUDA capability 12.0)")
+                    logger.warning("RTX 50 series support requires a newer PyTorch build; falling back to CPU for now.")
                     return torch.device("cpu")
                 
                 # Test if GPU actually works with kernel execution
@@ -88,8 +94,8 @@ class Config:
                 return torch.device("cuda")
             except Exception as e:
                 # GPU detected but not compatible
-                print(f"⚠️  GPU detected but not compatible: {e}")
-                print("   Falling back to CPU mode")
+                logger.warning(f"GPU detected but not compatible: {e}")
+                logger.warning("Falling back to CPU mode")
                 pass
         
         # Use CPU for maximum compatibility (optimized with 16 threads)
