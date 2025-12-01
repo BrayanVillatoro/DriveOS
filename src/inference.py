@@ -18,6 +18,7 @@ from .video_processor import VideoProcessor
 from .telemetry_processor import TelemetryProcessor, TelemetryPoint
 from .config import config
 from .racing_line import RacingLineEstimator, plot_debug_track
+from .geometry import apply_homography, invert_homography
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,24 @@ class InferenceEngine:
         # Telemetry buffer for sequence processing
         self.telemetry_buffer: List[TelemetryPoint] = []
         self.buffer_size = 100  # Number of telemetry points to keep
+
+        # Optional homography for BEV/world mapping (image->world)
+        self.H = None
+        self.H_inv = None
+        if getattr(config, 'HOMOGRAPHY_PATH', ''):
+            try:
+                if os.path.isfile(config.HOMOGRAPHY_PATH):
+                    self.H = np.load(config.HOMOGRAPHY_PATH)
+                    self.H_inv = np.linalg.inv(self.H)
+                    logger.info(f"Loaded homography for live BEV: {config.HOMOGRAPHY_PATH}")
+            except Exception as e:
+                logger.warning(f"Failed loading homography at {config.HOMOGRAPHY_PATH}: {e}")
+
+        # Live optimized spline cache (pixel coords) updated every N frames
+        self._live_pts_px = None
+        self._live_speed = None
+        self._frame_idx = 0
+        self._opt_every = max(3, int(getattr(config, 'LIVE_OPTIMIZE_EVERY_N', 8)))
         
     def preprocess_image(self, frame: np.ndarray) -> torch.Tensor:
         """
@@ -317,6 +336,76 @@ class InferenceEngine:
         
         # Blend overlay with original frame
         result = cv2.addWeighted(result, 0.75, overlay, 0.25, 0)
+
+        # Derive a centerline from segmentation and overlay it for alignment
+        try:
+            rle = RacingLineEstimator()
+            # seg_map is already resized to frame size (w, h)
+            centerline_pts = rle.extract_centerline_from_segmentation(seg_map.astype(np.int32))
+            if centerline_pts is not None and centerline_pts.shape[0] >= 8:
+                # Smooth with a light spline fit and render
+                try:
+                    from scipy.interpolate import splev
+                    tck, _ = rle.fit_spline(centerline_pts, smoothing=2.0)
+                    x_s, y_s = splev(np.linspace(0, 1, min(800, centerline_pts.shape[0] * 4)), tck)
+                    pts_px = np.vstack([x_s, y_s]).T
+                except Exception:
+                    pts_px = centerline_pts
+
+                # Keep in-bounds points only
+                h, w = result.shape[:2]
+                pts_px = np.asarray(pts_px, dtype=np.float32)
+                inside = ((pts_px[:, 0] >= 0) & (pts_px[:, 0] < w) & (pts_px[:, 1] >= 0) & (pts_px[:, 1] < h))
+                pts_px = pts_px[inside]
+                if pts_px.shape[0] > 1:
+                    cv2.polylines(result, [np.round(pts_px).astype(np.int32).reshape((-1, 1, 2))], isClosed=False, color=(0, 255, 255), thickness=2)
+
+                # Optionally compute/update a lap-time-optimized line (BEV/world if homography exists)
+                self._frame_idx += 1
+                if self._frame_idx % self._opt_every == 0:
+                    try:
+                        cl_for_opt = centerline_pts
+                        if self.H is not None:
+                            # Map pixels->world
+                            world_pts = apply_homography(self.H, cl_for_opt)
+                            cl_space = world_pts
+                        else:
+                            cl_space = cl_for_opt  # pixel space fallback
+
+                        # Optimize with modest iteration budget for live
+                        try:
+                            spline_opt, curvature_opt, arc_opt, speed_opt, _ = rle.optimize_racing_line(cl_space, n_control=10, maxiter=80)
+                            # Map back to pixels if world space used
+                            opt_xy = np.vstack([spline_opt[0], spline_opt[1]]).T
+                            if self.H is not None:
+                                px = apply_homography(self.H_inv, opt_xy)
+                            else:
+                                px = opt_xy
+                            self._live_pts_px = px.astype(np.float32)
+                            self._live_speed = speed_opt
+                        except Exception:
+                            # If optimization fails, cache smoothed centerline
+                            self._live_pts_px = pts_px.astype(np.float32)
+                            self._live_speed = np.linspace(1.0, 1.0, self._live_pts_px.shape[0])
+                    except Exception:
+                        pass
+
+                # Overlay cached optimized line if present
+                try:
+                    if self._live_pts_px is not None and self._live_pts_px.shape[0] > 1:
+                        px = self._live_pts_px
+                        # In-bounds filter
+                        h, w = result.shape[:2]
+                        inside2 = ((px[:, 0] >= 0) & (px[:, 0] < w) & (px[:, 1] >= 0) & (px[:, 1] < h))
+                        px = px[inside2]
+                        if px.shape[0] > 1:
+                            # color by speed if available
+                            spd = self._live_speed if self._live_speed is not None else np.linspace(1.0, 1.0, px.shape[0])
+                            result = rle.overlay_racing_line(result, (px[:, 0], px[:, 1]), spd)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
         # Get optimal point from model prediction
         opt_x, opt_y = prediction['optimal_line']
@@ -384,7 +473,7 @@ class InferenceEngine:
                 sy = alpha * float(pt[1]) + (1 - alpha) * prev[1]
                 smoothed_buffer.append((sx, sy))
 
-        # Spline interpolation for even smoother curve
+        # Spline interpolation for even smoother curve (buffer-based fallback)
         try:
             from scipy.interpolate import CubicSpline
             if len(smoothed_buffer) > 3:

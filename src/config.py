@@ -65,6 +65,10 @@ class Config:
     SEGMENTATION_SAVE_FREQ: int = int(os.getenv("SEGMENTATION_SAVE_FREQ", "30"))
     # Maximum number of segmentation map files to keep (older files will be removed). 0 = unlimited
     SEGMENTATION_MAX_FILES: int = int(os.getenv("SEGMENTATION_MAX_FILES", "200"))
+
+    # Geometry/Calibration
+    HOMOGRAPHY_PATH: str = os.getenv("HOMOGRAPHY_PATH", "")
+    LIVE_OPTIMIZE_EVERY_N: int = int(os.getenv("LIVE_OPTIMIZE_EVERY_N", "8"))
     
     @classmethod
     def get_device(cls):

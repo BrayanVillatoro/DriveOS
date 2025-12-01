@@ -19,18 +19,67 @@ Usage:
 """
 
 import argparse
+import os
 import cv2
 import numpy as np
 from pathlib import Path
 import json
-from typing import List, Tuple
+from typing import List, Tuple, Optional
+
+def _to_homogeneous(pts: np.ndarray) -> np.ndarray:
+    pts = np.asarray(pts, dtype=np.float64)
+    ones = np.ones((pts.shape[0], 1), dtype=np.float64)
+    return np.hstack([pts, ones])
+
+
+def _from_homogeneous(pts_h: np.ndarray) -> np.ndarray:
+    pts_h = np.asarray(pts_h, dtype=np.float64)
+    w = pts_h[:, 2:3]
+    w[w == 0] = 1e-12
+    return pts_h[:, :2] / w
+
+
+def _draw_world_grid_overlay(image: np.ndarray, H: np.ndarray, cell_m: float = 2.0, nx: int = 25, ny: int = 15) -> np.ndarray:
+    """Return a copy of image with a projected world grid overlay using H (image->world)."""
+    if H is None:
+        return image
+    H_inv = np.linalg.inv(H)
+    img = image.copy()
+    # Build grid lines in world coordinates
+    max_w = cell_m * nx
+    max_h = cell_m * ny
+    # verticals
+    for i in range(nx + 1):
+        xw = i * cell_m
+        pts_w = np.array([[xw, 0.0], [xw, max_h]], dtype=np.float64)
+        pts_i = _from_homogeneous((H_inv @ _to_homogeneous(pts_w).T).T)
+        pts_i = np.round(pts_i).astype(int)
+        cv2.line(img, tuple(pts_i[0]), tuple(pts_i[1]), (0, 255, 255), 1, cv2.LINE_AA)
+    # horizontals
+    for j in range(ny + 1):
+        yw = j * cell_m
+        pts_w = np.array([[0.0, yw], [max_w, yw]], dtype=np.float64)
+        pts_i = _from_homogeneous((H_inv @ _to_homogeneous(pts_w).T).T)
+        pts_i = np.round(pts_i).astype(int)
+        cv2.line(img, tuple(pts_i[0]), tuple(pts_i[1]), (0, 255, 255), 1, cv2.LINE_AA)
+    return img
+
 
 class TrainingDataLabeler:
     """Interactive tool for labeling racing video frames"""
     
-    def __init__(self, output_dir: str):
+    def __init__(self, output_dir: str, homography_path: Optional[str] = None, grid_cell_m: float = 2.0):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.homography_path = homography_path
+        self.H = None
+        if homography_path and os.path.isfile(homography_path):
+            try:
+                self.H = np.load(homography_path)
+            except Exception:
+                self.H = None
+        self.grid_cell_m = grid_cell_m
+        self.show_grid = True if self.H is not None else False
         
         # Annotation state
         self.current_tool = 'racing_line'  # racing_line, track_edge, curb, off_track
@@ -122,6 +171,7 @@ class TrainingDataLabeler:
         print("  3 - Draw Curbs (blue)")
         print("  4 - Mark Off-Track Areas (red)")
         print("  u - Undo last annotation")
+        print("  g - Toggle world grid overlay (if homography loaded)")
         print("  c - Clear all annotations")
         print("  s - Save and next frame")
         print("  n - Skip this frame")
@@ -130,6 +180,11 @@ class TrainingDataLabeler:
         while True:
             # Draw current annotations
             display = frame.copy()
+            if self.show_grid and self.H is not None:
+                try:
+                    display = _draw_world_grid_overlay(display, self.H, self.grid_cell_m)
+                except Exception:
+                    pass
             
             # Draw saved annotations
             for tool, color in self.colors.items():
@@ -166,6 +221,8 @@ class TrainingDataLabeler:
             elif key == ord('c'):
                 # Clear all annotations
                 self.annotations = {k: [] for k in self.annotations}
+            elif key == ord('g'):
+                self.show_grid = not self.show_grid
             elif key == ord('s'):
                 # Save frame and mask
                 self.save_labeled_frame(frame, frame_id)
@@ -193,10 +250,28 @@ class TrainingDataLabeler:
         cv2.imwrite(str(mask_path), mask)
         
         # Save annotations as JSON for reference
+        # If homography available, also save racing_line in world coordinates
+        annotations_world = None
+        if self.H is not None and self.annotations['racing_line']:
+            try:
+                annotations_world = {
+                    'racing_line_world': [
+                        _from_homogeneous((self.H @ _to_homogeneous(np.array(line, dtype=np.float64)).T).T).tolist()
+                        for line in self.annotations['racing_line'] if len(line) >= 2
+                    ]
+                }
+            except Exception:
+                annotations_world = None
+
         json_path = self.output_dir / 'annotations' / f'anno_{frame_id:06d}.json'
         json_path.parent.mkdir(exist_ok=True)
         with open(json_path, 'w') as f:
-            json.dump(self.annotations, f)
+            payload = {**self.annotations}
+            if annotations_world:
+                payload.update(annotations_world)
+            if self.homography_path:
+                payload['homography_path'] = str(Path(self.homography_path).name)
+            json.dump(payload, f)
         
         print(f"✓ Saved frame {frame_id}")
         
@@ -205,7 +280,9 @@ class TrainingDataLabeler:
 
 
 def extract_and_label_frames(video_path: str, output_dir: str, 
-                             frame_interval: int = 30):
+                             frame_interval: int = 30,
+                             homography_path: Optional[str] = None,
+                             grid_cell_m: float = 2.0):
     """
     Extract frames from video and label them interactively
     
@@ -214,7 +291,7 @@ def extract_and_label_frames(video_path: str, output_dir: str,
         output_dir: Directory to save training data
         frame_interval: Extract every N frames (default: 30 = ~1 frame per second)
     """
-    labeler = TrainingDataLabeler(output_dir)
+    labeler = TrainingDataLabeler(output_dir, homography_path=homography_path, grid_cell_m=grid_cell_m)
     
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -228,6 +305,14 @@ def extract_and_label_frames(video_path: str, output_dir: str,
     print(f"Total frames: {total_frames}")
     print(f"FPS: {fps}")
     print(f"Will extract every {frame_interval} frames")
+    if homography_path and os.path.isfile(homography_path):
+        print(f"Using homography: {homography_path} (grid {grid_cell_m} m)")
+        # Save a copy in dataset root for convenience
+        try:
+            H = np.load(homography_path)
+            np.save(str(Path(output_dir) / 'homography.npy'), H)
+        except Exception:
+            pass
     print(f"Estimated frames to label: {total_frames // frame_interval}")
     
     frame_count = 0
@@ -271,10 +356,20 @@ def main():
                        help='Output directory for training data')
     parser.add_argument('--interval', type=int, default=30,
                        help='Extract every N frames (default: 30)')
+    parser.add_argument('--homography', type=str, default=None,
+                       help='Optional path to H.npy (image->world) for grid overlay and world annotations')
+    parser.add_argument('--grid-cell-m', type=float, default=2.0,
+                       help='Grid cell size in meters when H is provided (default: 2m)')
     
     args = parser.parse_args()
     
-    extract_and_label_frames(args.video, args.output_dir, args.interval)
+    extract_and_label_frames(
+        args.video,
+        args.output_dir,
+        args.interval,
+        homography_path=args.homography,
+        grid_cell_m=args.grid_cell_m,
+    )
 
 
 if __name__ == '__main__':
