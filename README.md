@@ -78,10 +78,9 @@ The installer automatically handles everything - Python environment, dependencie
   - Off-track area detection
 
 - **📊 Visual Feedback:**
-  - Purple line = Optimal racing line
-  - Cyan overlay = Track edges
-  - Green zones = Safe racing area
-  - Red highlights = Off track areas
+  - Green overlay = Detected track surface
+  - White lines = Track boundaries
+  - Speed-colored racing line (Red=slow curves, Yellow=medium, Green=fast straights)
 
 - **🎯 Professional GUI:**
   - Easy to use interface
@@ -167,30 +166,6 @@ python launchers/launch_gui.py
 - **GPU:** 30-60 FPS, ~15-30ms/frame, 10-20x faster training
 
 **Processing:** 320x320 model resolution, outputs at input resolution (720p/1080p)
-
-### Key Equation (Lateral Speed Limit)
-
-DriveOS uses a simple, physically‑motivated lateral speed limit to compute an achievable speed profile along a candidate racing line. The core relation is:
-
-```
-v_lat(s) = sqrt( mu * g / (|kappa(s)| + eps) )
-```
-
-- `v_lat(s)`: maximum lateral (cornering) speed at arc position `s`
-- `mu`: tire/road friction coefficient (configurable)
-- `g`: gravitational acceleration (9.81 m/s^2)
-- `kappa(s)`: curvature of the spline at `s` (1 / radius)
-- `eps`: small epsilon to avoid division by zero
-
-How it's used:
-- Compute curvature along a dense spline fit of the centerline.
-- Convert curvature to a lateral speed limit using the equation above.
-- Apply forward/backward passes that enforce longitudinal acceleration and braking limits to create a physically consistent speed profile (so you cannot instantaneously jump to the lateral limit if you don't have enough accel/brake capacity).
-- Estimate lap time by integrating `dt = ds / v(s)` over the track and optionally optimize lateral offsets (control points) to minimize lap time.
-
-This lightweight physics layer enables DriveOS's offline optimizer to search for lateral adjustments that reduce lap time while remaining consistent with vehicle acceleration/braking and tire grip.
-
-
 
 ## 📄 License
 

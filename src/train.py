@@ -80,11 +80,14 @@ class RacingLineDataset(Dataset):
         image = cv2.resize(image, target_size)
         mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
         
+        # IMPROVED: Better mask preprocessing for training
+        
         # Merge edge class (3) into track (0) if configured to reduce fragmentation
         if getattr(config, 'MERGE_EDGE_INTO_TRACK', True):
             mask[mask == 3] = 0
         # Keep only classes 0,1,2 (track, racing_line, off_track). Curbs (4) -> track.
         mask[mask == 4] = 0
+        
         # Dilation of racing line to increase pixel footprint (improves class balance)
         if (mask == 1).sum() > 0:
             k = int(getattr(config, 'RACING_LINE_DILATE_KERNEL', 7))
@@ -96,6 +99,33 @@ class RacingLineDataset(Dataset):
                     mask[(rl_dil > 0)] = 1
                 except Exception:
                     pass
+        
+        # IMPROVED: Additional track cleanup to reduce fragmentation
+        # Close small gaps in track surface
+        track_mask = (mask == 0).astype(np.uint8)
+        if track_mask.sum() > 0:
+            try:
+                kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+                track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_close)
+                
+                # Select largest connected component to remove small fragments
+                num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(track_mask, connectivity=8)
+                if num_labels > 1:
+                    # Find largest component (excluding background)
+                    sizes = stats[1:, cv2.CC_STAT_AREA]
+                    largest_id = np.argmax(sizes) + 1
+                    track_mask = (labels == largest_id).astype(np.uint8)
+                
+                # Update mask with cleaned track
+                mask[track_mask == 0] = 2  # Non-track -> off-track
+                mask[track_mask == 1] = 0  # Track remains track
+                
+                # Restore racing line on top of track
+                if (rl_dil > 0).sum() > 0:
+                    mask[rl_dil > 0] = 1
+            except Exception:
+                pass
+        
         # Clamp remaining values to 0..2 range
         mask = np.clip(mask, 0, 2)
         

@@ -221,7 +221,12 @@ class DriveOSGUI:
     def on_tab_changed(self, event):
         """Handle tab change events"""
         current_tab = self.notebook.index(self.notebook.select())
-        if current_tab == 2:  # Training tab
+        if current_tab == 1:  # Live Preview tab
+            # Auto-detect cameras on first visit
+            if not hasattr(self, '_cameras_detected'):
+                self._cameras_detected = True
+                self.root.after(500, self.detect_cameras)  # Delay to let UI render
+        elif current_tab == 2:  # Training tab
             self.update_data_stats()
         
     def create_live_view(self):
@@ -304,18 +309,13 @@ class DriveOSGUI:
         
         self.play_btn = ttk.Button(controls, text="▶ Start Processing",
                                    command=self.start_live_processing,
-                                   state='disabled')
+                                   state='normal')
         self.play_btn.pack(side='left', padx=5)
         
         self.stop_btn = ttk.Button(controls, text="⬛ Stop",
                                    command=self.stop_live_processing,
                                    state='disabled')
         self.stop_btn.pack(side='left', padx=5)
-
-        # Load optimized line (manual) so user can overlay an offline spline
-        self.load_line_btn = ttk.Button(controls, text="📂 Load Optimized Line",
-                        command=self.load_optimized_line)
-        self.load_line_btn.pack(side='left', padx=5)
         
         # Info panel
         info_frame = ttk.LabelFrame(self.live_tab, text="Real-time Statistics", padding=10)
@@ -612,35 +612,82 @@ class DriveOSGUI:
         params_frame.pack(fill='x')
         
         # Epochs
-        tk.Label(params_frame, text="Epochs:",
+        epochs_label_frame = tk.Frame(params_frame, bg=self.colors['card'])
+        epochs_label_frame.grid(row=0, column=0, sticky='w', pady=10, padx=(0, 20))
+        tk.Label(epochs_label_frame, text="Epochs:",
                 fg=self.colors['fg'],
                 bg=self.colors['card'],
-                font=('Segoe UI', 10)).grid(row=0, column=0, sticky='w', pady=10, padx=(0, 20))
+                font=('Segoe UI', 10, 'bold')).pack(anchor='w')
+        tk.Label(epochs_label_frame, text="(Training iterations)",
+                fg=self.colors['fg_dim'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 8)).pack(anchor='w')
+        
         self.epochs_var = tk.IntVar(value=20)
         ttk.Scale(params_frame, from_=5, to=100, variable=self.epochs_var,
                  orient='horizontal', length=250).grid(row=0, column=1, padx=15)
-        tk.Label(params_frame, textvariable=self.epochs_var, width=4,
+        self.epochs_label = tk.Label(params_frame, text="20", width=6,
                 fg=self.colors['accent'],
                 bg=self.colors['card'],
-                font=('Segoe UI', 12, 'bold')).grid(row=0, column=2, padx=15)
+                font=('Segoe UI', 12, 'bold'), anchor='center')
+        self.epochs_label.grid(row=0, column=2, padx=15)
+        tk.Label(params_frame, text="More = Better quality (slower)\nLess = Faster (lower quality)",
+                fg=self.colors['fg_dim'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 8), justify='left').grid(row=0, column=3, sticky='w', padx=5)
+        
+        # Update label when slider moves
+        def update_epochs_label(*args):
+            self.epochs_label.config(text=str(self.epochs_var.get()))
+        self.epochs_var.trace_add('write', update_epochs_label)
         
         # Batch size
-        tk.Label(params_frame, text="Batch Size:",
+        batch_label_frame = tk.Frame(params_frame, bg=self.colors['card'])
+        batch_label_frame.grid(row=1, column=0, sticky='w', pady=10, padx=(0, 20))
+        tk.Label(batch_label_frame, text="Batch Size:",
                 fg=self.colors['fg'],
                 bg=self.colors['card'],
-                font=('Segoe UI', 10)).grid(row=1, column=0, sticky='w', pady=10, padx=(0, 20))
+                font=('Segoe UI', 10, 'bold')).pack(anchor='w')
+        tk.Label(batch_label_frame, text="(Images per step)",
+                fg=self.colors['fg_dim'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 8)).pack(anchor='w')
+        
         self.batch_size_var = tk.IntVar(value=2)
         ttk.Spinbox(params_frame, from_=2, to=16, textvariable=self.batch_size_var,
                    width=20).grid(row=1, column=1, padx=15, sticky='w')
-        
-        # Learning rate
-        tk.Label(params_frame, text="Learning Rate:",
+        tk.Label(params_frame, text="",
                 fg=self.colors['fg'],
                 bg=self.colors['card'],
-                font=('Segoe UI', 10)).grid(row=2, column=0, sticky='w', pady=10, padx=(0, 20))
+                font=('Segoe UI', 12, 'bold')).grid(row=1, column=2, padx=15)
+        tk.Label(params_frame, text="Higher = Uses more memory\nLower = Safer for CPU training",
+                fg=self.colors['fg_dim'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 8), justify='left').grid(row=1, column=3, sticky='w', padx=5)
+        
+        # Learning rate
+        lr_label_frame = tk.Frame(params_frame, bg=self.colors['card'])
+        lr_label_frame.grid(row=2, column=0, sticky='w', pady=10, padx=(0, 20))
+        tk.Label(lr_label_frame, text="Learning Rate:",
+                fg=self.colors['fg'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 10, 'bold')).pack(anchor='w')
+        tk.Label(lr_label_frame, text="(Step size)",
+                fg=self.colors['fg_dim'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 8)).pack(anchor='w')
+        
         self.lr_var = tk.DoubleVar(value=0.001)
         ttk.Entry(params_frame, textvariable=self.lr_var,
                  width=20).grid(row=2, column=1, padx=15, sticky='w')
+        tk.Label(params_frame, text="",
+                fg=self.colors['fg'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 12, 'bold')).grid(row=2, column=2, padx=15)
+        tk.Label(params_frame, text="0.001 recommended\n(Don't change unless experienced)",
+                fg=self.colors['fg_dim'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 8), justify='left').grid(row=2, column=3, sticky='w', padx=5)
         
         # STEP 3: Hardware Configuration (RIGHT SIDE)
         step3_frame = ttk.LabelFrame(steps_container, text="③ STEP 3: Hardware", padding=15)
@@ -667,13 +714,24 @@ class DriveOSGUI:
         cores_container = tk.Frame(step3_frame, bg=self.colors['card'])
         cores_container.pack(fill='x')
         
-        self.cpu_cores_label = tk.Label(cores_container, text="CPU Threads:",
+        self.max_cpu_cores = os.cpu_count() or 8
+        
+        cpu_label_frame = tk.Frame(cores_container, bg=self.colors['card'])
+        cpu_label_frame.pack(anchor='w', pady=(0, 5))
+        
+        self.cpu_cores_label = tk.Label(cpu_label_frame, 
+                                        text=f"CPU Threads (Your system: {self.max_cpu_cores}):",
                                         fg=self.colors['fg'],
                                         bg=self.colors['card'],
-                                        font=('Segoe UI', 10))
-        self.cpu_cores_label.pack(anchor='w', pady=(0, 5))
+                                        font=('Segoe UI', 10, 'bold'))
+        self.cpu_cores_label.pack(anchor='w')
         
-        self.max_cpu_cores = os.cpu_count() or 8
+        tk.Label(cpu_label_frame, 
+                text="Higher = Faster training (uses more CPU)",
+                fg=self.colors['fg_dim'],
+                bg=self.colors['card'],
+                font=('Segoe UI', 8)).pack(anchor='w')
+        
         self.cpu_cores_var = tk.IntVar(value=min(self.max_cpu_cores, 8))
         
         cores_control_frame = tk.Frame(cores_container, bg=self.colors['card'])
@@ -683,11 +741,16 @@ class DriveOSGUI:
                                          variable=self.cpu_cores_var,
                                          orient='horizontal', length=200)
         self.cpu_cores_scale.pack(side='left', padx=5)
-        self.cpu_cores_value_label = tk.Label(cores_control_frame, textvariable=self.cpu_cores_var, width=4,
+        self.cpu_cores_value_label = tk.Label(cores_control_frame, text=str(self.cpu_cores_var.get()), width=6,
                                               fg=self.colors['accent'],
                                               bg=self.colors['card'],
-                                              font=('Segoe UI', 12, 'bold'))
+                                              font=('Segoe UI', 12, 'bold'), anchor='center')
         self.cpu_cores_value_label.pack(side='left', padx=5)
+        
+        # Update label when slider moves
+        def update_cpu_cores_label(*args):
+            self.cpu_cores_value_label.config(text=str(self.cpu_cores_var.get()))
+        self.cpu_cores_var.trace_add('write', update_cpu_cores_label)
         
         # STEP 4: Start Training
         step4_frame = ttk.LabelFrame(self.training_tab, text="④ STEP 4: Train the Model", padding=25)
@@ -910,42 +973,165 @@ Right Click        - Undo last point
             self.screen_controls.pack(fill='x')
             self.live_status.config(text="Ready to start screen capture")
             self.play_btn.config(state='normal')
+            self.stop_btn.config(state='disabled')
     
     def detect_cameras(self):
-        """Detect available cameras"""
-        self.live_status.config(text="Detecting cameras...")
+        """Detect available cameras with improved reliability"""
+        # Run detection in background thread to prevent UI freezing
+        thread = threading.Thread(target=self._detect_cameras_thread, daemon=True)
+        thread.start()
+    
+    def _detect_cameras_thread(self):
+        """Background thread for camera detection"""
+        self.live_status.config(text="🔍 Detecting cameras...")
+        self.root.update()
+        
         self.available_cameras = []
         camera_names = []
         
-        # Test up to 10 camera indices
-        for i in range(10):
-            try:
-                cap = cv2.VideoCapture(i)
-                if cap.isOpened():
-                    ret, frame = cap.read()
-                    if ret:
-                        # Get camera resolution
-                        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        camera_name = f"Camera {i} ({width}x{height})"
-                        self.available_cameras.append(i)
-                        camera_names.append(camera_name)
-                    cap.release()
-            except:
-                continue
+        # Use faster backends - DirectShow can hang
+        import platform
+        backends = []
+        if platform.system() == 'Windows':
+            backends = [
+                (cv2.CAP_MSMF, "Media Foundation"),  # Faster, more reliable
+                (cv2.CAP_DSHOW, "DirectShow"),  # Slower but compatible
+            ]
+        else:
+            backends = [
+                (cv2.CAP_V4L2, "Video4Linux"),  # Linux
+                (cv2.CAP_AVFOUNDATION, "AVFoundation"),  # macOS
+                (cv2.CAP_ANY, "Auto")  # Fallback
+            ]
         
+        detected = set()  # Avoid duplicates
+        
+        # Try each backend with timeout protection
+        for backend, backend_name in backends:
+            self.live_status.config(text=f"Trying {backend_name}...")
+            self.root.update()
+            
+            # Test camera indices 0-3 (most systems have 0-1 cameras)
+            for i in range(4):
+                if i in detected:
+                    continue
+                
+                # Skip if we already found 2 cameras (most common case)
+                if len(detected) >= 2 and backend != backends[0][0]:
+                    break
+                    
+                cap = None
+                try:
+                    import time
+                    start_time = time.time()
+                    
+                    # Try to open with specific backend (with timeout)
+                    cap = cv2.VideoCapture(i, backend)
+                    
+                    # Set shorter timeout
+                    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1500)  # 1.5 second timeout
+                    
+                    # Check if open timed out
+                    if time.time() - start_time > 2:
+                        if cap:
+                            cap.release()
+                        continue
+                    
+                    if cap.isOpened():
+                        # Single quick read attempt
+                        ret = False
+                        frame = None
+                        
+                        read_start = time.time()
+                        ret, frame = cap.read()
+                        
+                        # Timeout after 1 second
+                        if time.time() - read_start > 1:
+                            cap.release()
+                            continue
+                        
+                        if ret and frame is not None and frame.size > 0:
+                            # Get camera properties
+                            try:
+                                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                                fps = int(cap.get(cv2.CAP_PROP_FPS))
+                                
+                                # Try to get camera name (Windows only)
+                                camera_name = f"Camera {i}"
+                                if backend == cv2.CAP_DSHOW:
+                                    try:
+                                        # Windows can sometimes get device name
+                                        backend_name_prop = cap.getBackendName()
+                                        if backend_name_prop:
+                                            camera_name = f"{backend_name_prop} {i}"
+                                    except:
+                                        pass
+                                
+                                # Format display name
+                                display_name = f"{camera_name} ({width}x{height}"
+                                if fps > 0:
+                                    display_name += f" @ {fps}fps"
+                                display_name += ")"
+                                
+                                self.available_cameras.append(i)
+                                camera_names.append(display_name)
+                                detected.add(i)
+                                
+                                self.live_status.config(text=f"✓ {display_name}")
+                                self.root.update()
+                            except Exception:
+                                # Fallback if properties fail
+                                self.available_cameras.append(i)
+                                camera_names.append(f"Camera {i}")
+                                detected.add(i)
+                        
+                        cap.release()
+                        
+                except Exception:
+                    # Silently continue on error
+                    pass
+                finally:
+                    if cap is not None:
+                        try:
+                            cap.release()
+                        except:
+                            pass
+            
+            # If we found cameras, don't try other backends
+            if len(detected) > 0:
+                break
+        
+        # Update UI with results
         if self.available_cameras:
             self.camera_combo['values'] = camera_names
             self.camera_combo.current(0)
-            self.live_status.config(text=f"Found {len(self.available_cameras)} camera(s)")
-            messagebox.showinfo("Camera Detection", 
-                              f"Found {len(self.available_cameras)} camera(s):\n" + 
-                              "\n".join(camera_names))
+            self.live_status.config(text=f"✓ Found {len(self.available_cameras)} camera(s)")
+            
+            camera_list = "\n".join([f"  • {name}" for name in camera_names])
+            messagebox.showinfo(
+                "Camera Detection Complete", 
+                f"Successfully detected {len(self.available_cameras)} camera(s):\n\n{camera_list}\n\n"
+                f"Select a camera and click 'Start Processing' to begin."
+            )
         else:
             self.camera_combo['values'] = ["No cameras detected"]
             self.camera_var.set("No cameras detected")
-            self.live_status.config(text="No cameras found")
-            messagebox.showwarning("Camera Detection", "No cameras detected. Please check your camera connections.")
+            self.live_status.config(text="❌ No cameras found")
+            
+            messagebox.showwarning(
+                "No Cameras Detected",
+                "No cameras were detected on your system.\n\n"
+                "Troubleshooting steps:\n"
+                "1. Make sure your camera is connected\n"
+                "2. Check if camera works in other apps (Camera app, Zoom, etc.)\n"
+                "3. Grant camera permissions to Python/this app\n"
+                "4. Try unplugging and replugging the camera\n"
+                "5. Restart the application\n\n"
+                "On Windows: Check Device Manager for camera issues\n"
+                "On macOS: Check System Preferences > Security & Privacy > Camera\n"
+                "On Linux: Check camera permissions and v4l2 drivers"
+            )
     
     def start_live_processing(self):
         """Start live video processing"""
@@ -981,18 +1167,16 @@ Right Click        - Undo last point
         """Background thread for live processing"""
         cap = None
         try:
-            processor = BatchProcessor('models/racing_line_model.pth')
-
-            # temporal fusion helper for recent centerlines
-            fusion = TemporalFusion(maxlen=8)
+            # Initialize inference engine (uses improved detection from inference.py)
+            from .inference import InferenceEngine
+            engine = InferenceEngine('models/racing_line_model.pth')
             
-            # Determine capture source
             source_type = self.source_type_var.get()
             
             if source_type == "camera":
                 # Get selected camera index
                 if not self.available_cameras:
-                    self.live_status.config(text="Error: No cameras detected. Click 'Detect Cameras' first.")
+                    self.live_status.config(text="❌ No cameras detected. Click 'Detect Cameras' first.")
                     self.stop_processing = True
                     self.play_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
@@ -1000,32 +1184,49 @@ Right Click        - Undo last point
                 
                 selected_idx = self.camera_combo.current()
                 if selected_idx < 0:
-                    self.live_status.config(text="Error: Please select a camera")
+                    self.live_status.config(text="❌ Please select a camera")
                     self.stop_processing = True
                     self.play_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     return
                 
                 camera_index = self.available_cameras[selected_idx]
-                cap = cv2.VideoCapture(camera_index)
+                
+                # Use Media Foundation for faster camera access on Windows
+                import platform
+                if platform.system() == 'Windows':
+                    cap = cv2.VideoCapture(camera_index, cv2.CAP_MSMF)
+                else:
+                    cap = cv2.VideoCapture(camera_index)
+                
                 self.capture = cap
                 if not cap.isOpened():
-                    self.live_status.config(text=f"Error: Cannot open camera {camera_index}")
+                    self.live_status.config(text=f"❌ Cannot open camera {camera_index}")
                     self.stop_processing = True
                     self.play_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     return
+                
+                # Set higher resolution and FPS for better quality
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+                cap.set(cv2.CAP_PROP_FPS, 60)
+                
+                # Get actual settings (camera may not support requested values)
+                actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                actual_fps = int(cap.get(cv2.CAP_PROP_FPS))
+                
+                self.live_status.config(text=f"▶️ Processing camera {camera_index} ({actual_width}x{actual_height} @ {actual_fps}fps)...")
+                
             elif source_type == "screen":
-                # Import screen capture libraries
+                # Screen capture mode
                 try:
                     import mss
-                    import mss.tools
-                    
                     sct = mss.mss()
-                    
-                    # If window mode, get the monitor (full screen for now)
                     monitor = sct.monitors[1]  # Primary monitor
                     
+                    self.live_status.config(text="▶️ Processing screen capture...")
                     frame_count = 0
                     import time
                     
@@ -1033,18 +1234,14 @@ Right Click        - Undo last point
                         # Capture screen
                         sct_img = sct.grab(monitor)
                         frame = np.array(sct_img)
-                        
-                        # Convert from BGRA to BGR
                         frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
                         
-                        # Process frame
-                        prediction = processor.engine.predict(frame, None)
-                        result_frame = processor.engine.visualize_prediction(frame, prediction)
-                        
-                        # Convert to RGB for display
+                        # Process with improved inference engine
+                        prediction = engine.predict(frame, None)
+                        result_frame = engine.visualize_prediction(frame, prediction)
                         result_frame = cv2.cvtColor(result_frame, cv2.COLOR_BGR2RGB)
                         
-                        # Put in queue (non-blocking)
+                        # Queue frame
                         try:
                             self.frame_queue.put_nowait((result_frame, frame_count, prediction))
                         except queue.Full:
@@ -1052,121 +1249,49 @@ Right Click        - Undo last point
                         
                         frame_count += 1
                         time.sleep(0.033)  # ~30 FPS
-                        
+                    
                     sct.close()
-                    self.stop_processing = True
                     return
                     
                 except ImportError:
-                    self.live_status.config(text="Error: mss library required for screen capture. Install with: pip install mss")
+                    self.live_status.config(text="❌ Install 'mss' library: pip install mss")
                     self.stop_processing = True
                     return
             
-            # Standard video/camera processing loop
+            # Camera processing loop - uses improved inference with corner-aware racing line
             frame_count = 0
-            # Attempt one-time automatic extraction of a precomputed spline from the first frame
-            pts_px = None
-            rle = None
-            try:
-                # Grab a single sample frame (may consume one camera frame)
-                ret_sample, sample_frame = cap.read()
-                if ret_sample:
-                    try:
-                        pred0 = processor.engine.predict(sample_frame, None)
-                        seg_small = pred0['segmentation']
-                        h, w = sample_frame.shape[:2]
-                        seg_resized = cv2.resize(seg_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-                        rle = __import__('src.racing_line', fromlist=['RacingLineEstimator']).RacingLineEstimator()
-                        pts_auto_px = rle.extract_centerline_from_segmentation(seg_resized)
-                        if pts_auto_px is not None and len(pts_auto_px) > 4:
-                            # Attempt a quick optimization with small iterations to improve the path
-                            try:
-                                spline, curvature, arc, speed, opt_res = rle.optimize_racing_line(pts_auto_px, n_control=8, maxiter=60)
-                                pts_px = np.vstack([spline[0], spline[1]]).T
-                                # If user hasn't provided a precomputed spline, store this auto-optimized one
-                                if getattr(self, 'precomputed_pts_px', None) is None:
-                                    self.precomputed_pts_px = pts_px
-                                # Log optimization result
-                                try:
-                                    self.log_training(f"Auto-optimized spline ready (success={opt_res.success})")
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pts_px = pts_auto_px
-                    except Exception:
-                        pts_px = None
-                else:
-                    # If we couldn't grab a sample, reset cap position if video
-                    try:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    except Exception:
-                        pass
-            except Exception:
-                pts_px = None
-
+            import time
+            fps_start_time = time.time()
+            fps_frame_count = 0
+            
             while not self.stop_processing and cap.isOpened():
                 ret, frame = cap.read()
                 if not ret:
-                    if source_type == "video":
-                        break  # End of video
-                    else:
-                        continue  # Camera error, try again
+                    continue  # Camera error, try again
                 
-                # Process frame
-                prediction = processor.engine.predict(frame, None)
-                result_frame = processor.engine.visualize_prediction(frame, prediction)
-
-                # Temporal fusion: try to extract per-frame centerline and add to buffer
-                try:
-                    seg_small = prediction.get('segmentation', None)
-                    if seg_small is not None:
-                        h, w = frame.shape[:2]
-                        seg_resized = cv2.resize(seg_small.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-                        try:
-                            rle_local = rle if 'rle' in locals() and rle is not None else __import__('src.racing_line', fromlist=['RacingLineEstimator']).RacingLineEstimator()
-                        except Exception:
-                            rle_local = __import__('src.racing_line', fromlist=['RacingLineEstimator']).RacingLineEstimator()
-                        pts_frame = rle_local.extract_centerline_from_segmentation(seg_resized)
-                        if pts_frame is not None and pts_frame.shape[0] >= 8:
-                            fusion.add_centerline(pts_frame)
-
-                except Exception:
-                    pass
-
-                # If we have a stable aggregation, use it (user-provided spline always takes precedence)
-                pts_to_overlay = None
-                if getattr(self, 'precomputed_pts_px', None) is not None:
-                    pts_to_overlay = self.precomputed_pts_px
-                else:
-                    agg = fusion.get_average_centerline(num=600)
-                    if agg is not None and agg.shape[0] >= 8:
-                        try:
-                            # run a light optimization on the aggregated centerline to smooth offsets
-                            spline, curvature, arc, speed, opt_res = rle_local.optimize_racing_line(agg, n_control=10, maxiter=80)
-                            pts_to_overlay = np.vstack([spline[0], spline[1]]).T
-                        except Exception:
-                            pts_to_overlay = agg
-
-                if pts_to_overlay is not None:
-                    try:
-                        if rle is None:
-                            rle = __import__('src.racing_line', fromlist=['RacingLineEstimator']).RacingLineEstimator()
-                        if isinstance(pts_to_overlay, np.ndarray) and pts_to_overlay.ndim == 2 and pts_to_overlay.shape[1] == 2:
-                            speed_placeholder = np.linspace(1.0, 1.0, pts_to_overlay.shape[0])
-                            result_frame = rle.overlay_racing_line(result_frame, (pts_to_overlay[:, 0], pts_to_overlay[:, 1]), speed_placeholder)
-                    except Exception:
-                        pass
+                # Process frame with improved inference engine
+                # (includes corner detection, track cleanup, temporal smoothing)
+                prediction = engine.predict(frame, None)
+                result_frame = engine.visualize_prediction(frame, prediction)
                 
                 # Convert to RGB for display
                 result_frame = cv2.cvtColor(result_frame, cv2.COLOR_BGR2RGB)
                 
-                # Put in queue (non-blocking)
+                # Queue frame for display
                 try:
                     self.frame_queue.put_nowait((result_frame, frame_count, prediction))
                 except queue.Full:
                     pass
                 
                 frame_count += 1
+                fps_frame_count += 1
+                
+                # Update FPS every second
+                if time.time() - fps_start_time >= 1.0:
+                    fps = fps_frame_count / (time.time() - fps_start_time)
+                    self.fps_label.config(text=f"FPS: {fps:.1f}")
+                    fps_start_time = time.time()
+                    fps_frame_count = 0
                 
             if cap is not None:
                 cap.release()
@@ -1218,142 +1343,6 @@ Right Click        - Undo last point
         # Schedule next update
         if self.is_processing:
             self.root.after(30, self.update_live_display)
-
-    def load_optimized_line(self):
-        """Load an offline-optimized racing line (CSV or NPY) and use it for live overlay"""
-        file_path = filedialog.askopenfilename(
-            title="Load Optimized Line",
-            filetypes=[("NumPy (.npy/.npz)", "*.npy *.npz"), ("CSV (.csv)", "*.csv"), ("All files", "*.*")]
-        )
-        if not file_path:
-            return
-
-        # Try to estimate an image reference size from available sample frames
-        sample_img = None
-        sample_path = 'data/user_annotations/images/frame_000000.jpg'
-        if os.path.exists(sample_path):
-            sample_img = cv2.imread(sample_path)
-        else:
-            folder = 'data/user_annotations/images'
-            if os.path.isdir(folder):
-                files = [f for f in os.listdir(folder) if f.lower().endswith(('.jpg', '.png'))]
-                if files:
-                    sample_img = cv2.imread(os.path.join(folder, files[0]))
-
-        if sample_img is not None:
-            img_h, img_w = sample_img.shape[:2]
-        else:
-            img_w, img_h = 1280, 720
-
-        try:
-            pts = self._detect_and_convert_points(file_path, (img_h, img_w))
-            if pts is None or not (isinstance(pts, np.ndarray) and pts.ndim == 2 and pts.shape[1] == 2):
-                raise ValueError('Failed to interpret spline file into Nx2 pixel coordinates')
-
-            self.precomputed_pts_px = pts
-            self.live_status.config(text=f"Loaded optimized line: {os.path.basename(file_path)}")
-            messagebox.showinfo("Loaded", f"Optimized line loaded: {file_path}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load optimized line:\n{str(e)}")
-
-    def _detect_and_convert_points(self, file_path, img_shape):
-        """Load a spline file and try several common coordinate formats.
-
-        Tries:
-        - Pixel coordinates (N,2)
-        - Normalized 0..1 coordinates -> pixels
-        - Normalized -1..1 -> map to pixels
-        - (y,x) swapped variants of above
-
-        Returns an (N,2) float ndarray in pixel coordinates or None.
-        """
-        # load array
-        try:
-            if file_path.lower().endswith('.npy') or file_path.lower().endswith('.npz'):
-                arr = np.load(file_path, allow_pickle=True)
-                if isinstance(arr, np.lib.npyio.NpzFile):
-                    keys = list(arr.keys())
-                    if not keys:
-                        return None
-                    pts = arr[keys[0]]
-                else:
-                    pts = arr
-            else:
-                pts = np.loadtxt(file_path, delimiter=',')
-        except Exception:
-            return None
-
-        pts = np.asarray(pts, dtype=np.float64)
-        if pts.ndim != 2:
-            return None
-
-        h, w = img_shape
-
-        candidates = []
-
-        def push_candidate(a, descr):
-            a = np.asarray(a, dtype=np.float64)
-            if a.ndim != 2 or a.shape[1] != 2:
-                return
-            candidates.append((a, descr))
-
-        # direct (assume (N,2) pixel coords)
-        push_candidate(pts, 'pixels')
-
-        # swapped (y,x)
-        push_candidate(pts[:, ::-1], 'swapped')
-
-        # normalized 0..1
-        if np.nanmax(np.abs(pts)) <= 1.01:
-            push_candidate(np.column_stack([pts[:, 0] * w, pts[:, 1] * h]), 'norm_0_1')
-            push_candidate(np.column_stack([pts[:, 1] * w, pts[:, 0] * h]), 'norm_0_1_swapped')
-
-        # normalized -1..1
-        if np.nanmax(np.abs(pts)) <= 1.01 + 1e-6:
-            # also try mapping -1..1 -> 0..1
-            push_candidate(np.column_stack([((pts[:, 0] + 1) / 2.0) * w, ((pts[:, 1] + 1) / 2.0) * h]), 'norm_m1_1')
-            push_candidate(np.column_stack([((pts[:, 1] + 1) / 2.0) * w, ((pts[:, 0] + 1) / 2.0) * h]), 'norm_m1_1_swapped')
-
-        # If points look large/small, also try interpreting as already pixel but maybe transposed
-        if pts.shape[0] == 2 and pts.shape[1] != 2:
-            # e.g., shape (2,N)
-            arr_t = pts.T
-            push_candidate(arr_t, 'transpose')
-            push_candidate(arr_t[:, ::-1], 'transpose_swapped')
-
-        # scoring: prefer candidates with mean y located within lower half of the image (typical racing line)
-        best = None
-        best_score = -1e9
-        for a, descr in candidates:
-            if np.isnan(a).any() or np.isinf(a).any():
-                continue
-            if a.shape[0] < 4:
-                continue
-            # basic bounds check
-            minx, maxx = a[:, 0].min(), a[:, 0].max()
-            miny, maxy = a[:, 1].min(), a[:, 1].max()
-            if maxx - minx < 2 or maxy - miny < 2:
-                continue
-            # score components
-            cx = a[:, 0].mean()
-            cy = a[:, 1].mean()
-            # prefer cy in [0.2*h, 0.95*h]
-            cy_score = 1.0 - abs((cy / h) - 0.5)
-            # prefer x spread across image width
-            xspread = (maxx - minx) / float(w)
-            score = cy_score + 0.5 * xspread
-            # penalize if many points outside image bounds
-            outside = ((a[:, 0] < -5) | (a[:, 0] > w + 5) | (a[:, 1] < -5) | (a[:, 1] > h + 5)).mean()
-            score = score - (outside * 2.0)
-            if score > best_score:
-                best_score = score
-                best = (a, descr, score)
-
-        if best is None:
-            return None
-
-        chosen, descr, sc = best
-        return chosen.astype(np.float32)
 
     def browse_video(self):
         """Browse and select a racing video file for analysis"""

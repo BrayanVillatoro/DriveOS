@@ -39,6 +39,9 @@ plotly>=5.17.0
 docker>=6.1.0
 python-dotenv>=1.0.0
 
+# OpenPilot ONNX runtime (optional)
+onnxruntime>=1.18.0
+
 # Utilities
 tqdm>=4.66.0
 pyyaml>=6.0.1

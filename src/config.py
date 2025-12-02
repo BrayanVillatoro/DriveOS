@@ -59,21 +59,7 @@ class Config:
     
     # Directory Settings
     LOGS_DIR: Path = LOGS_DIR
-    # Segmentation map debug saving (disabled by default to avoid large logs)
-    SAVE_SEGMENTATION_MAPS: bool = os.getenv("SAVE_SEGMENTATION_MAPS", "false").lower() == "true"
-    # Save every N predictions when enabled
-    SEGMENTATION_SAVE_FREQ: int = int(os.getenv("SEGMENTATION_SAVE_FREQ", "30"))
-    # Maximum number of segmentation map files to keep (older files will be removed). 0 = unlimited
-    SEGMENTATION_MAX_FILES: int = int(os.getenv("SEGMENTATION_MAX_FILES", "200"))
-
-    # Geometry/Calibration
-    HOMOGRAPHY_PATH: str = os.getenv("HOMOGRAPHY_PATH", "")
-    LIVE_OPTIMIZE_EVERY_N: int = int(os.getenv("LIVE_OPTIMIZE_EVERY_N", "8"))
-    # Centerline biasing towards inner edge in corners
-    # Default off to ensure immediate stability; can be enabled per track
-    BIAS_TO_INNER: bool = os.getenv("BIAS_TO_INNER", "false").lower() == "true"
-    BIAS_STRENGTH: float = float(os.getenv("BIAS_STRENGTH", "0.35"))  # fraction of half-width
-
+    
     # Training augmentation parameters
     RACING_LINE_DILATE_KERNEL: int = int(os.getenv("RACING_LINE_DILATE_KERNEL", "7"))
     MERGE_EDGE_INTO_TRACK: bool = os.getenv("MERGE_EDGE_INTO_TRACK", "true").lower() == "true"

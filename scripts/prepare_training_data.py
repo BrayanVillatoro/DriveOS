@@ -176,6 +176,12 @@ class TrainingDataLabeler:
         print("  s - Save and next frame")
         print("  n - Skip this frame")
         print("  q - Quit")
+        print("\n=== Racing Line Tips ===")
+        print("  • LEFT TURN: Position line on RIGHT side (outside) before corner")
+        print("  • RIGHT TURN: Position line on LEFT side (outside) before corner")
+        print("  • Hit APEX late (inside of corner middle)")
+        print("  • Exit WIDE (use full track on exit)")
+        print("  • STRAIGHTS: Use center unless setting up for next corner")
         
         while True:
             # Draw current annotations
@@ -236,15 +242,78 @@ class TrainingDataLabeler:
                 cv2.destroyWindow('Label Frame')
                 return None
     
+    def validate_annotations(self, mask: np.ndarray) -> Tuple[bool, List[str]]:
+        """
+        Validate annotation quality
+        
+        Returns:
+            Tuple of (is_valid, list of warnings)
+        """
+        warnings = []
+        
+        # Check if racing line exists
+        racing_line_pixels = np.sum(mask == 1)
+        if racing_line_pixels == 0:
+            warnings.append("⚠️  No racing line annotated")
+        elif racing_line_pixels < 100:
+            warnings.append("⚠️  Racing line is very short")
+        
+        # Check if track exists
+        track_pixels = np.sum(mask == 0)
+        if track_pixels < 1000:
+            warnings.append("⚠️  Very little track surface annotated")
+        
+        # Check if racing line is on track
+        if racing_line_pixels > 0 and track_pixels > 0:
+            # Dilate track slightly to check if line is within track
+            track_mask = (mask == 0).astype(np.uint8)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+            track_dilated = cv2.dilate(track_mask, kernel, iterations=1)
+            
+            racing_line_mask = (mask == 1).astype(np.uint8)
+            overlap = np.sum((track_dilated > 0) & (racing_line_mask > 0))
+            
+            if overlap < racing_line_pixels * 0.5:
+                warnings.append("⚠️  Racing line appears to be off track!")
+        
+        # Check for good balance
+        total_pixels = mask.shape[0] * mask.shape[1]
+        track_ratio = track_pixels / total_pixels
+        
+        if track_ratio < 0.05:
+            warnings.append("⚠️  Track surface is very small (< 5% of frame)")
+        elif track_ratio > 0.8:
+            warnings.append("⚠️  Track surface is very large (> 80% of frame)")
+        
+        is_valid = len(warnings) == 0 or all('very' not in w.lower() for w in warnings)
+        return is_valid, warnings
+    
     def save_labeled_frame(self, frame: np.ndarray, frame_id: int):
         """Save labeled frame and corresponding mask"""
+        # Create mask
+        mask = self.create_mask(frame.shape[:2])
+        
+        # Validate annotations
+        is_valid, warnings = self.validate_annotations(mask)
+        
+        # Display warnings
+        if warnings:
+            print("\nAnnotation Quality Check:")
+            for warning in warnings:
+                print(f"  {warning}")
+            if not is_valid:
+                print("\n⚠️  Quality issues detected. Save anyway? (y/n)")
+                response = input().strip().lower()
+                if response != 'y':
+                    print("Frame not saved. Fix annotations and try again.")
+                    return
+        
         # Save original frame
         frame_path = self.output_dir / 'images' / f'frame_{frame_id:06d}.jpg'
         frame_path.parent.mkdir(exist_ok=True)
         cv2.imwrite(str(frame_path), frame)
         
-        # Create and save mask
-        mask = self.create_mask(frame.shape[:2])
+        # Save mask
         mask_path = self.output_dir / 'masks' / f'mask_{frame_id:06d}.png'
         mask_path.parent.mkdir(exist_ok=True)
         cv2.imwrite(str(mask_path), mask)
