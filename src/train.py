@@ -210,7 +210,9 @@ def train_model(data_dir: str,
     
     # Create model
     logger.info("Creating model...")
-    model = RacingLineOptimizer()
+    # Use U-Net architecture
+    model = RacingLineOptimizer(use_unet=True)
+    logger.info("Training with U-Net architecture")
     trainer = ModelTrainer(model, device)
     
     # Setup optimizer

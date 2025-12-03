@@ -4,8 +4,6 @@ Machine Learning models for racing line prediction
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import models
-from torchvision.models.segmentation import DeepLabV3_ResNet50_Weights
 import numpy as np
 from typing import Tuple, Optional
 import logging
@@ -13,107 +11,66 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class RacingLineDetector(nn.Module):
+class UNet(nn.Module):
     """
-    Deep learning model for detecting optimal racing line from video
-    Uses a combination of semantic segmentation and regression
-    """
-    
-    def __init__(self, num_classes: int = 3, pretrained: bool = True):
-        """
-        Initialize racing line detector
-        
-        Args:
-            num_classes: Number of output classes (track, racing_line, off_track)
-            pretrained: Use pretrained backbone
-        """
-        super(RacingLineDetector, self).__init__()
-        
-        # Use ResNet50 as backbone with DeepLabV3
-        if pretrained:
-            # Load pretrained model with proper weights enum (fixes deprecation warning)
-            self.backbone = models.segmentation.deeplabv3_resnet50(
-                weights=DeepLabV3_ResNet50_Weights.DEFAULT
-            )
-            # Replace classifier head with custom num_classes
-            self.backbone.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=1)
-            self.backbone.aux_classifier[4] = nn.Conv2d(256, num_classes, kernel_size=1)
-        else:
-            # Create model from scratch with custom classes
-            self.backbone = models.segmentation.deeplabv3_resnet50(
-                weights=None, 
-                num_classes=num_classes
-            )
-        
-        # Additional regression head for line confidence
-        # Note: Will extract features from backbone's layer3 (1024 channels for ResNet50)
-        self.confidence_head = nn.Sequential(
-            nn.Conv2d(1024, 512, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(512, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 1, kernel_size=1),
-            nn.Sigmoid()
-        )
-        
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass
-        
-        Args:
-            x: Input tensor [B, 3, H, W]
-            
-        Returns:
-            Tuple of (segmentation_map, confidence_map)
-        """
-        # Segmentation output
-        seg_output = self.backbone(x)['out']
-        
-        # Extract features for confidence head
-        features = self.backbone.backbone.layer3(
-            self.backbone.backbone.layer2(
-                self.backbone.backbone.layer1(
-                    self.backbone.backbone.maxpool(
-                        self.backbone.backbone.relu(
-                            self.backbone.backbone.bn1(
-                                self.backbone.backbone.conv1(x)
-                            )
-                        )
-                    )
-                )
-            )
-        )
-        
-        confidence = self.confidence_head(features)
-        
-        return seg_output, confidence
-
-
-class TrackBoundaryDetector(nn.Module):
-    """
-    Detect track boundaries and drivable area
+    U-Net architecture for semantic segmentation
+    Better for track detection with skip connections
     """
     
-    def __init__(self, pretrained: bool = True):
-        super(TrackBoundaryDetector, self).__init__()
+    def __init__(self, in_channels: int = 3, num_classes: int = 3, base_filters: int = 64):
+        """
+        Initialize U-Net
         
-        # UNet-like architecture
-        self.encoder = models.resnet34(pretrained=pretrained)
+        Args:
+            in_channels: Number of input channels (3 for RGB)
+            num_classes: Number of output classes
+            base_filters: Base number of filters (will be multiplied in deeper layers)
+        """
+        super(UNet, self).__init__()
         
-        # Decoder
-        self.decoder = nn.ModuleList([
-            self._make_decoder_block(512, 256),
-            self._make_decoder_block(256, 128),
-            self._make_decoder_block(128, 64),
-            self._make_decoder_block(64, 32),
-        ])
+        # Encoder (downsampling path)
+        self.enc1 = self._make_encoder_block(in_channels, base_filters)
+        self.enc2 = self._make_encoder_block(base_filters, base_filters * 2)
+        self.enc3 = self._make_encoder_block(base_filters * 2, base_filters * 4)
+        self.enc4 = self._make_encoder_block(base_filters * 4, base_filters * 8)
         
-        self.final_conv = nn.Conv2d(32, 1, kernel_size=1)
+        # Bottleneck
+        self.bottleneck = self._make_encoder_block(base_filters * 8, base_filters * 16)
         
-    def _make_decoder_block(self, in_channels: int, out_channels: int):
-        """Create decoder block"""
+        # Decoder (upsampling path with skip connections)
+        self.upconv4 = nn.ConvTranspose2d(base_filters * 16, base_filters * 8, kernel_size=2, stride=2)
+        self.dec4 = self._make_decoder_block(base_filters * 16, base_filters * 8)
+        
+        self.upconv3 = nn.ConvTranspose2d(base_filters * 8, base_filters * 4, kernel_size=2, stride=2)
+        self.dec3 = self._make_decoder_block(base_filters * 8, base_filters * 4)
+        
+        self.upconv2 = nn.ConvTranspose2d(base_filters * 4, base_filters * 2, kernel_size=2, stride=2)
+        self.dec2 = self._make_decoder_block(base_filters * 4, base_filters * 2)
+        
+        self.upconv1 = nn.ConvTranspose2d(base_filters * 2, base_filters, kernel_size=2, stride=2)
+        self.dec1 = self._make_decoder_block(base_filters * 2, base_filters)
+        
+        # Final output layer
+        self.out_conv = nn.Conv2d(base_filters, num_classes, kernel_size=1)
+        
+        # Max pooling
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+    def _make_encoder_block(self, in_channels: int, out_channels: int):
+        """Create encoder block with two convolutions"""
         return nn.Sequential(
-            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+    
+    def _make_decoder_block(self, in_channels: int, out_channels: int):
+        """Create decoder block with two convolutions"""
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
@@ -122,24 +79,45 @@ class TrackBoundaryDetector(nn.Module):
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass"""
-        # Encoder
-        x = self.encoder.conv1(x)
-        x = self.encoder.bn1(x)
-        x = self.encoder.relu(x)
-        x = self.encoder.maxpool(x)
+        """
+        Forward pass with skip connections
         
-        x = self.encoder.layer1(x)
-        x = self.encoder.layer2(x)
-        x = self.encoder.layer3(x)
-        x = self.encoder.layer4(x)
+        Args:
+            x: Input tensor [B, C, H, W]
+            
+        Returns:
+            Segmentation map [B, num_classes, H, W]
+        """
+        # Encoder path with skip connections
+        enc1 = self.enc1(x)
+        enc2 = self.enc2(self.pool(enc1))
+        enc3 = self.enc3(self.pool(enc2))
+        enc4 = self.enc4(self.pool(enc3))
         
-        # Decoder
-        for decoder_block in self.decoder:
-            x = decoder_block(x)
+        # Bottleneck
+        bottleneck = self.bottleneck(self.pool(enc4))
         
-        x = self.final_conv(x)
-        return torch.sigmoid(x)
+        # Decoder path with skip connections
+        dec4 = self.upconv4(bottleneck)
+        dec4 = torch.cat([dec4, enc4], dim=1)  # Skip connection
+        dec4 = self.dec4(dec4)
+        
+        dec3 = self.upconv3(dec4)
+        dec3 = torch.cat([dec3, enc3], dim=1)  # Skip connection
+        dec3 = self.dec3(dec3)
+        
+        dec2 = self.upconv2(dec3)
+        dec2 = torch.cat([dec2, enc2], dim=1)  # Skip connection
+        dec2 = self.dec2(dec2)
+        
+        dec1 = self.upconv1(dec2)
+        dec1 = torch.cat([dec1, enc1], dim=1)  # Skip connection
+        dec1 = self.dec1(dec1)
+        
+        # Final output
+        out = self.out_conv(dec1)
+        
+        return out
 
 
 class TelemetryLSTM(nn.Module):
@@ -205,17 +183,33 @@ class TelemetryLSTM(nn.Module):
 
 class RacingLineOptimizer(nn.Module):
     """
-    Combined model that integrates vision and telemetry
+    U-Net based model for track segmentation
+    Simplified architecture focused on track detection only
     """
     
-    def __init__(self):
+    def __init__(self, use_unet: bool = True):
+        """
+        Initialize racing line optimizer with U-Net
+        
+        Args:
+            use_unet: Compatibility parameter (always uses U-Net now)
+        """
         super(RacingLineOptimizer, self).__init__()
         
-        self.vision_model = RacingLineDetector()
+        # Use U-Net for track segmentation
+        self.vision_model = UNet(in_channels=3, num_classes=3, base_filters=64)
+        
+        # Confidence estimation from segmentation output
+        self.confidence_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(3, 1),
+            nn.Sigmoid()
+        )
+        
         self.telemetry_model = TelemetryLSTM()
         
-        # Fusion layer - simplified for untrained use
-        # Vision confidence (1 feature) + telemetry prediction (3 features) = 4 total
+        # Fusion layer for combined predictions
         self.fusion = nn.Sequential(
             nn.Linear(4, 64),  # 1 from vision + 3 from telemetry
             nn.ReLU(),
@@ -227,19 +221,22 @@ class RacingLineOptimizer(nn.Module):
         
     def forward(self, image: torch.Tensor, telemetry_seq: torch.Tensor):
         """
-        Forward pass combining vision and telemetry
+        Forward pass
         
         Args:
             image: Input image [B, 3, H, W]
             telemetry_seq: Telemetry sequence [B, T, features]
             
         Returns:
-            Optimal racing line coordinates
+            Tuple of (optimal_line, segmentation_map, confidence)
         """
-        # Vision branch
-        seg_map, confidence = self.vision_model(image)
-        # Global average pooling to get single confidence value
-        vision_features = F.adaptive_avg_pool2d(confidence, (1, 1)).view(image.size(0), -1)
+        # U-Net segmentation
+        seg_map = self.vision_model(image)
+        
+        # Confidence estimation
+        confidence_scalar = self.confidence_head(seg_map)
+        confidence = confidence_scalar.unsqueeze(-1).unsqueeze(-1)  # [B, 1, 1, 1]
+        vision_features = confidence.view(image.size(0), -1)
         
         # Telemetry branch
         telemetry_pred, _ = self.telemetry_model(telemetry_seq)

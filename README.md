@@ -19,27 +19,31 @@ DriveOS is a **machine learning application** that trains neural networks to rec
    - Red/blue lines = track boundaries
    - This creates labeled training data (input: raw frame, output: racing line mask)
 
-2. **Neural Network Training** - DriveOS trains a DeepLabV3 model on your annotations
-   - The network has **23.8 million learnable parameters** (weights and biases)
+2. **Neural Network Training** - DriveOS trains a U-Net model on your annotations
+   - The network has **millions of learnable parameters** across encoder-decoder layers
    - Uses **supervised learning**: compares its predictions to your annotations
    - Calculates loss (how wrong it is) and adjusts parameters via gradient descent
-   - After 20-50 epochs, the network learns patterns: "asphalt looks like this", "racing lines follow these curves"
+   - After 50-100 epochs, the network learns patterns: "asphalt looks like this", "track boundaries follow these curves"
+   - **Skip connections** preserve spatial details from encoder to decoder for precise boundaries
    - **This is machine learning** - the model discovers features automatically, not programmed
 
 3. **Temporal Understanding** - LSTM networks add sequential awareness
    - Tracks the last 60 frames (~2 seconds) of racing line history
    - Learns motion patterns: how racing lines flow through corner sequences
    - Smooths predictions by understanding context from previous frames
-
 4. **Inference** - The trained model analyzes new footage
    - Processes each frame through the neural network (forward pass)
-   - Outputs pixel-wise predictions: probability each pixel is part of the racing line
-   - Combines spatial (CNN) and temporal (LSTM) predictions for smooth, continuous lines
-
+   - Outputs pixel-wise predictions: probability each pixel is part of the track
+   - Applies advanced post-processing: morphological operations, connected component filtering
+   - Combines spatial (U-Net) and temporal (LSTM + 5-frame voting) for smooth, stable output
+   - Distance transform creates gradient overlay for depth visualization
 **Why This is Machine Learning:**
-- **Pattern discovery** - Network finds features (track edges, racing line curvature) automatically from data
+- **Pattern discovery** - U-Net finds features (track edges, surface texture) automatically from data
 - **Generalization** - After training on 50-100 frames, works on thousands of new frames
 - **Gradient-based optimization** - Uses backpropagation to minimize prediction error
+- **Skip connections** - Preserves fine spatial details for precise boundary detection
+- **Trainable** - Performance improves as you add more annotated examples
+- **Adaptive learning** - Learns track-specific characteristics (lighting, surface type, camera angle)iction error
 - **Transfer learning** - Starts with ResNet50 pre-trained on ImageNet (object recognition)
 - **Trainable** - Performance improves as you add more annotated examples
 
@@ -72,15 +76,17 @@ The installer automatically handles everything - Python environment, dependencie
   - Screen capture (perfect for sim racing!)
 
 - **🤖 AI-Powered Analysis:**
-  - Deep learning models (DeepLabV3 + LSTM)
-  - Real-time racing line detection
-  - Track edge and curb identification
-  - Off-track area detection
+  - U-Net architecture with skip connections for precise track detection
+  - LSTM for temporal smoothing
+  - Real-time track surface segmentation
+  - Advanced morphological processing for clean boundaries
+  - Multi-factor component scoring for fragment filtering
 
 - **📊 Visual Feedback:**
-  - Green overlay = Detected track surface
-  - White lines = Track boundaries
-  - Speed-colored racing line (Red=slow curves, Yellow=medium, Green=fast straights)
+  - Green gradient overlay = Detected track surface (brighter toward center)
+  - White boundaries = Track edges with anti-aliasing
+  - Wide, square-edged track coverage
+  - Confidence and inference time display
 
 - **🎯 Professional GUI:**
   - Easy to use interface
@@ -159,13 +165,27 @@ python launchers/launch_gui.py
 
 ## 🧠 Technical Details
 
-**Architecture:** DeepLabV3 (ResNet50) + LSTM for vision and temporal analysis
+**Architecture:** U-Net with encoder-decoder + skip connections + LSTM for temporal consistency
+
+**Model Details:**
+- **Encoder:** 5 downsampling blocks (base 64 filters, up to 1024)
+- **Decoder:** 4 upsampling blocks with skip connections
+- **Processing:** Bilateral filtering + morphological operations (RECT kernels for square edges)
+- **Segmentation:** 3 classes (track, racing_line, off_track)
+- **Post-processing:** Connected component analysis with multi-factor scoring
+- **Temporal:** 5-frame voting buffer for stability
 
 **Performance:**
 - **CPU:** 5-10 FPS, ~100-200ms/frame, good for post-analysis
 - **GPU:** 30-60 FPS, ~15-30ms/frame, 10-20x faster training
 
-**Processing:** 320x320 model resolution, outputs at input resolution (720p/1080p)
+**Processing:** 320x320 model resolution, outputs at input resolution (720p/1080p/4K)
+
+**Advanced Features:**
+- Distance transform for gradient overlay
+- Adaptive component selection (area + position + width + centering)
+- Multi-stage morphological cleanup
+- Anti-aliased boundaries
 
 ## 📄 License
 

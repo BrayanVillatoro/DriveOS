@@ -18,7 +18,6 @@ import time
 
 from .inference import BatchProcessor
 from .train import train_model
-from .temporal_fusion import TemporalFusion
 
 
 class DriveOSGUI:

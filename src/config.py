@@ -65,6 +65,9 @@ class Config:
     MERGE_EDGE_INTO_TRACK: bool = os.getenv("MERGE_EDGE_INTO_TRACK", "true").lower() == "true"
     CLASS_WEIGHTS: str = os.getenv("CLASS_WEIGHTS", "0.2,5.0,1.0")  # track,racing_line,off_track
     
+    # Model architecture selection
+    USE_UNET: bool = os.getenv("USE_UNET", "false").lower() == "true"  # Use U-Net instead of DeepLabV3
+    
     @classmethod
     def get_device(cls):
         """Get the computing device (GPU or CPU) - uses CPU for maximum compatibility"""

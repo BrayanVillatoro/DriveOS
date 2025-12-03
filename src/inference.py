@@ -23,7 +23,10 @@ class InferenceEngine:
             self.device = config.get_device()
         else:
             self.device = torch.device(device)
-        self.model = RacingLineOptimizer()
+        
+        # Always use U-Net architecture
+        self.model = RacingLineOptimizer(use_unet=True)
+        logger.info("Using U-Net architecture")
         
         # Load model weights
         if model_path:
