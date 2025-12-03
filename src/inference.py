@@ -209,13 +209,18 @@ class InferenceEngine:
         else:
             track_mask = track_mask_nonzero
         
-        # IMPROVED: More aggressive morphological cleanup to handle fragmentation
-        # Close small gaps first
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+        # IMPROVED: More aggressive morphological operations for wider coverage
+        # Use RECT kernels for square edges instead of ELLIPSE for rounded edges
+        # Dilate first to expand the track area significantly
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+        track_mask = cv2.dilate(track_mask, kernel_dilate, iterations=2)
         
-        # Remove small noise
-        kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        # Close gaps with rectangular kernel for sharper edges
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 20))
+        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+        
+        # Remove small noise with smaller kernel
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_OPEN, kernel_open)
         
         # IMPROVED: Connected component analysis to select main track region
@@ -246,174 +251,22 @@ class InferenceEngine:
                     largest_id = np.argmax(sizes) + 1
                     track_mask = (labels == largest_id).astype(np.uint8)
         
-        # Final smoothing
-        kernel_smooth = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # Final smoothing with rectangular kernel for sharper corners
+        kernel_smooth = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_smooth)
         
-        # Show track surface with semi-transparent green
+        # Show track surface with semi-transparent green overlay
         track_overlay = np.zeros_like(frame)
         track_overlay[track_mask > 0] = [90, 200, 90]  # Green for track
         result = cv2.addWeighted(result, 0.7, track_overlay, 0.3, 0)
         
-        # Draw white track boundaries
+        # Draw white track boundaries with thicker edges
         edges = cv2.Canny(track_mask * 255, 50, 150)
-        kernel = np.ones((2, 2), np.uint8)
-        edges = cv2.dilate(edges, kernel, iterations=1)
+        kernel_edge = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        edges = cv2.dilate(edges, kernel_edge, iterations=2)
         result[edges > 0] = [255, 255, 255]  # White edges
         
-        # IMPROVED: Extract and draw racing line with corner-aware positioning
-        try:
-            # Find contours of track
-            contours, _ = cv2.findContours(track_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                # Get largest contour (main track)
-                largest_contour = max(contours, key=cv2.contourArea)
-                
-                # Only process if contour is large enough
-                if cv2.contourArea(largest_contour) > 5000:
-                    # IMPROVED: Compute racing line with corner detection and proper positioning
-                    racing_line_pts = []
-                    left_edges = []
-                    right_edges = []
-                    
-                    for y in range(0, h, 4):  # Sample every 4 pixels for more detail
-                        row_mask = track_mask[y, :]
-                        track_xs = np.where(row_mask > 0)[0]
-                        if len(track_xs) > 5:  # Valid track row
-                            left_x = track_xs[0]
-                            right_x = track_xs[-1]
-                            left_edges.append([left_x, y])
-                            right_edges.append([right_x, y])
-                    
-                    if len(left_edges) > 15 and len(right_edges) > 15:
-                        left_edges = np.array(left_edges, dtype=np.float32)
-                        right_edges = np.array(right_edges, dtype=np.float32)
-                        
-                        # Smooth edges first
-                        from scipy.ndimage import gaussian_filter1d
-                        left_edges[:, 0] = gaussian_filter1d(left_edges[:, 0], sigma=5)
-                        right_edges[:, 0] = gaussian_filter1d(right_edges[:, 0], sigma=5)
-                        
-                        # IMPROVED: Detect corner direction by analyzing edge curvature
-                        # Calculate track width at each point
-                        track_widths = right_edges[:, 0] - left_edges[:, 0]
-                        
-                        # Calculate lateral movement of edges
-                        window_size = 10
-                        racing_line_pts = []
-                        
-                        for i in range(len(left_edges)):
-                            # Look ahead to detect corner direction
-                            start_idx = max(0, i - window_size)
-                            end_idx = min(len(left_edges), i + window_size)
-                            
-                            # Analyze edge movement
-                            if end_idx - start_idx > 5:
-                                # Calculate edge displacement trends
-                                left_trend = left_edges[end_idx-1, 0] - left_edges[start_idx, 0]
-                                right_trend = right_edges[end_idx-1, 0] - right_edges[start_idx, 0]
-                                
-                                # Determine corner type:
-                                # Left turn: right edge moves left more (negative), stay RIGHT
-                                # Right turn: left edge moves right more (positive), stay LEFT
-                                # Straight: balanced movement, use center
-                                
-                                corner_indicator = right_trend - left_trend
-                                track_width = track_widths[i]
-                                
-                                # Bias factor: -1 (left) to +1 (right)
-                                # Approaching left turn -> bias right (+1)
-                                # Approaching right turn -> bias left (-1)
-                                if abs(corner_indicator) > track_width * 0.15:  # Significant corner
-                                    if corner_indicator < 0:  # Left turn approaching
-                                        bias = 0.4  # Position 40% toward right (outside)
-                                    else:  # Right turn approaching
-                                        bias = -0.4  # Position 40% toward left (outside)
-                                else:  # Straight or gentle curve
-                                    bias = 0.0  # Center
-                                
-                                # Calculate racing line position
-                                center_x = (left_edges[i, 0] + right_edges[i, 0]) / 2
-                                offset = (track_width / 2) * bias
-                                racing_x = center_x + offset
-                                
-                                racing_line_pts.append([racing_x, left_edges[i, 1]])
-                            else:
-                                # Fallback to center for edge cases
-                                center_x = (left_edges[i, 0] + right_edges[i, 0]) / 2
-                                racing_line_pts.append([center_x, left_edges[i, 1]])
-                        
-                        racing_line_pts = np.array(racing_line_pts, dtype=np.float32)
-                        
-                        # Multi-pass smoothing for stability
-                        from scipy.ndimage import gaussian_filter1d
-                        racing_line_pts[:, 0] = gaussian_filter1d(racing_line_pts[:, 0], sigma=5)
-                        racing_line_pts[:, 1] = gaussian_filter1d(racing_line_pts[:, 1], sigma=2)
-                        racing_line_pts = racing_line_pts.astype(np.int32)
-                    
-                        # Compute speed profile based on curvature
-                        # More curved = slower (red), straighter = faster (green)
-                        speeds = []
-                        window_size = 8  # Look ahead/behind for curvature
-                        for i in range(len(racing_line_pts)):
-                            # Get window of points
-                            start = max(0, i - window_size)
-                            end = min(len(racing_line_pts), i + window_size + 1)
-                            window = racing_line_pts[start:end]
-                            
-                            if len(window) < 3:
-                                speeds.append(0.5)
-                                continue
-                            
-                            # Calculate curvature from window variance
-                            dx = np.diff(window[:, 0])
-                            dy = np.diff(window[:, 1])
-                            angles = np.arctan2(dy, dx)
-                            
-                            # Measure angle variation (higher = more curved)
-                            if len(angles) > 1:
-                                angle_std = np.std(angles)
-                                curvature = min(angle_std * 5, 1.0)
-                            else:
-                                curvature = 0.0
-                            
-                            # Convert to speed (low curvature = high speed)
-                            speed = 1.0 - curvature
-                            speeds.append(speed)
-                        
-                        speeds = np.array(speeds)
-                        # Smooth speeds for visual stability
-                        speeds = gaussian_filter1d(speeds, sigma=3)
-                        
-                        # Draw racing line with speed coloring - thicker and with outline
-                        for i in range(len(racing_line_pts) - 1):
-                            pt1 = tuple(racing_line_pts[i])
-                            pt2 = tuple(racing_line_pts[i + 1])
-                            
-                            # Color from red (slow) to yellow (medium) to green (fast)
-                            speed = speeds[i]
-                            if speed < 0.5:
-                                # Red to Yellow
-                                r = 255
-                                g = int(255 * (speed * 2))
-                                b = 0
-                            else:
-                                # Yellow to Green
-                                r = int(255 * (2 - speed * 2))
-                                g = 255
-                                b = 0
-                            
-                            color = (b, g, r)  # BGR format
-                            
-                            # Draw black outline first for visibility
-                            cv2.line(result, pt1, pt2, (0, 0, 0), 8, cv2.LINE_AA)
-                            cv2.line(result, pt1, pt2, color, 5, cv2.LINE_AA)
-                else:
-                    # Contour too small
-                    pass
-        except Exception as e:
-            # If racing line extraction fails, just continue without it
-            logger.debug(f"Could not draw racing line: {e}")
+        # Racing line visualization removed - focusing on track detection only
         
         # Add minimal info overlay
         confidence = float(np.mean(prediction['confidence']))
