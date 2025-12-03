@@ -287,6 +287,11 @@ class InferenceEngine:
         track_mask_float = track_mask.astype(np.float32)
         track_mask_float = cv2.GaussianBlur(track_mask_float, (5, 5), 0)
         track_mask = (track_mask_float > 0.5).astype(np.uint8)
+
+        # Horizon/ROI clamp: ignore predictions too high in the frame
+        # This reduces "up ahead" highlighting when confidence is low.
+        horizon_row = int(h * 0.4)  # keep lower 60% of the frame as drivable ROI
+        track_mask[:horizon_row, :] = 0
         
         # Enhanced visualization with gradient overlay for depth
         track_overlay = np.zeros_like(frame)
@@ -304,12 +309,77 @@ class InferenceEngine:
         
         # Draw clean white track boundaries with anti-aliasing
         edges = cv2.Canny(track_mask * 255, 30, 100)
-        # Dilate edges slightly for visibility
         kernel_edge = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         edges = cv2.dilate(edges, kernel_edge, iterations=1)
-        # Draw with slight blur for anti-aliasing
         edge_mask = edges > 0
         result[edge_mask] = [255, 255, 255]
+
+        # Extract left/right track edge polylines for clearer visualization
+        # Strategy: for scanlines from bottom up, find contiguous drivable band
+        # around image center, then take its leftmost and rightmost x.
+        center_x = w // 2
+        ys = []
+        left_xs = []
+        right_xs = []
+        for y in range(h - 1, horizon_row, -4):  # step for speed and smoothness
+            row = track_mask[y]
+            if row.sum() < 10:
+                continue
+
+            # Find contiguous regions of ones
+            x_indices = np.where(row > 0)[0]
+            if x_indices.size == 0:
+                continue
+
+            # Split into segments where gaps > 3 pixels
+            segments = []
+            start = x_indices[0]
+            prev = start
+            for x in x_indices[1:]:
+                if x - prev > 3:
+                    segments.append((start, prev))
+                    start = x
+                prev = x
+            segments.append((start, prev))
+
+            # Pick segment whose center is closest to image center
+            best = None
+            best_dist = 1e9
+            for s, e in segments:
+                cx = (s + e) // 2
+                dist = abs(cx - center_x)
+                if e - s > 10 and dist < best_dist:
+                    best = (s, e)
+                    best_dist = dist
+
+            if best is None:
+                continue
+
+            ys.append(y)
+            left_xs.append(best[0])
+            right_xs.append(best[1])
+
+        # Smooth with a small moving average to reduce jitter
+        def smooth_poly(xs, ys, k=5):
+            if len(xs) < 3:
+                return None
+            xs_sm = []
+            ys_sm = []
+            for i in range(len(xs)):
+                i0 = max(0, i - k)
+                i1 = min(len(xs), i + k + 1)
+                xs_sm.append(int(np.mean(xs[i0:i1])))
+                ys_sm.append(int(np.mean(ys[i0:i1])))
+            return list(zip(xs_sm, ys_sm))
+
+        left_poly = smooth_poly(left_xs, ys, k=3)
+        right_poly = smooth_poly(right_xs, ys, k=3)
+
+        # Draw polylines (white) with anti-aliasing
+        if left_poly and len(left_poly) > 4:
+            cv2.polylines(result, [np.array(left_poly, dtype=np.int32)], False, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+        if right_poly and len(right_poly) > 4:
+            cv2.polylines(result, [np.array(right_poly, dtype=np.int32)], False, (255, 255, 255), 2, lineType=cv2.LINE_AA)
         
         # Racing line visualization removed - focusing on track detection only
         
