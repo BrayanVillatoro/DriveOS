@@ -195,8 +195,11 @@ class InferenceEngine:
         seg_map = cv2.resize(
             prediction['segmentation'].astype(np.uint8),
             (w, h),
-            interpolation=cv2.INTER_NEAREST
+            interpolation=cv2.INTER_LINEAR  # Smoother interpolation
         )
+        
+        # Apply bilateral filter to preserve edges while smoothing
+        seg_map = cv2.bilateralFilter(seg_map, 5, 50, 50)
         
         # IMPROVED: Multi-class track detection with connected component analysis
         # Try both class 0 and non-zero classes to find track surface
@@ -209,62 +212,101 @@ class InferenceEngine:
         else:
             track_mask = track_mask_nonzero
         
-        # IMPROVED: More aggressive morphological operations for wider coverage
-        # Use RECT kernels for square edges instead of ELLIPSE for rounded edges
-        # Dilate first to expand the track area significantly
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
-        track_mask = cv2.dilate(track_mask, kernel_dilate, iterations=2)
+        # Apply morphological gradient to enhance boundaries
+        kernel_enhance = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        gradient = cv2.morphologyEx(track_mask, cv2.MORPH_GRADIENT, kernel_enhance)
+        track_mask = cv2.add(track_mask, gradient)
         
-        # Close gaps with rectangular kernel for sharper edges
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 20))
-        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+        # IMPROVED: Multi-stage morphological operations for wider, cleaner coverage
+        # Stage 1: Remove small noise first
+        kernel_denoise = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_OPEN, kernel_denoise)
         
-        # Remove small noise with smaller kernel
-        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_OPEN, kernel_open)
+        # Stage 2: Close small gaps before expansion
+        kernel_close_small = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_close_small, iterations=2)
+        
+        # Stage 3: Expand track area significantly with rectangular kernel
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (30, 30))
+        track_mask = cv2.dilate(track_mask, kernel_dilate, iterations=3)
+        
+        # Stage 4: Final closing to fill any remaining gaps
+        kernel_close_large = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_close_large, iterations=2)
         
         # IMPROVED: Connected component analysis to select main track region
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(track_mask, connectivity=8)
         
         if num_labels > 1:  # More than just background
-            # Filter components by size and position
+            # Filter components by size, position, and aspect ratio
             valid_components = []
             for i in range(1, num_labels):  # Skip background (0)
                 area = stats[i, cv2.CC_STAT_AREA]
-                x, y = int(centroids[i][0]), int(centroids[i][1])
+                x = stats[i, cv2.CC_STAT_LEFT]
+                y = stats[i, cv2.CC_STAT_TOP]
+                width = stats[i, cv2.CC_STAT_WIDTH]
+                height = stats[i, cv2.CC_STAT_HEIGHT]
+                cx, cy = int(centroids[i][0]), int(centroids[i][1])
                 
-                # Require minimum area (remove tiny fragments)
-                if area > 5000:
-                    # Prefer components in lower 2/3 of image (where track typically is)
-                    distance_score = 1.0 - (y / h) * 0.5  # Lower is better
-                    valid_components.append((i, area * distance_score))
+                # Require substantial area (remove fragments)
+                min_area = (w * h) * 0.05  # At least 5% of frame
+                if area > min_area:
+                    # Multi-factor scoring:
+                    # 1. Area (larger is better)
+                    area_score = area / (w * h)
+                    # 2. Position (lower in frame is better for track)
+                    position_score = (cy / h) ** 0.5
+                    # 3. Width (wider components more likely to be track)
+                    width_score = (width / w) ** 0.5
+                    # 4. Horizontal centering (track usually centered)
+                    center_score = 1.0 - abs((cx / w) - 0.5)
+                    
+                    total_score = area_score * 2.0 + position_score * 1.5 + width_score * 1.0 + center_score * 0.5
+                    valid_components.append((i, total_score))
             
-            # Select largest valid component
+            # Select best component
             if valid_components:
                 valid_components.sort(key=lambda x: x[1], reverse=True)
                 main_component_id = valid_components[0][0]
                 track_mask = (labels == main_component_id).astype(np.uint8)
             else:
-                # Fallback: use largest component regardless
+                # Fallback: use largest component
                 sizes = stats[1:, cv2.CC_STAT_AREA]
                 if len(sizes) > 0:
                     largest_id = np.argmax(sizes) + 1
                     track_mask = (labels == largest_id).astype(np.uint8)
         
-        # Final smoothing with rectangular kernel for sharper corners
-        kernel_smooth = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        # Final refinement with rectangular kernel for sharp, clean edges
+        kernel_smooth = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
         track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_smooth)
         
-        # Show track surface with semi-transparent green overlay
-        track_overlay = np.zeros_like(frame)
-        track_overlay[track_mask > 0] = [90, 200, 90]  # Green for track
-        result = cv2.addWeighted(result, 0.7, track_overlay, 0.3, 0)
+        # Optional: Apply slight gaussian blur to track edges for anti-aliasing
+        track_mask_float = track_mask.astype(np.float32)
+        track_mask_float = cv2.GaussianBlur(track_mask_float, (5, 5), 0)
+        track_mask = (track_mask_float > 0.5).astype(np.uint8)
         
-        # Draw white track boundaries with thicker edges
-        edges = cv2.Canny(track_mask * 255, 50, 150)
-        kernel_edge = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        edges = cv2.dilate(edges, kernel_edge, iterations=2)
-        result[edges > 0] = [255, 255, 255]  # White edges
+        # Enhanced visualization with gradient overlay for depth
+        track_overlay = np.zeros_like(frame)
+        # Create distance transform for gradient effect (brighter at center)
+        dist_transform = cv2.distanceTransform(track_mask, cv2.DIST_L2, 5)
+        dist_normalized = cv2.normalize(dist_transform, None, 0, 1, cv2.NORM_MINMAX)
+        
+        # Apply green color with intensity based on distance from edge
+        for c in range(3):
+            track_overlay[:, :, c] = track_mask * (90 if c == 0 else 200 if c == 1 else 90)
+            # Add gradient intensity (brighter toward center)
+            track_overlay[:, :, c] = np.minimum(255, track_overlay[:, :, c] * (0.7 + 0.3 * dist_normalized))
+        
+        result = cv2.addWeighted(result, 0.65, track_overlay.astype(np.uint8), 0.35, 0)
+        
+        # Draw clean white track boundaries with anti-aliasing
+        edges = cv2.Canny(track_mask * 255, 30, 100)
+        # Dilate edges slightly for visibility
+        kernel_edge = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        edges = cv2.dilate(edges, kernel_edge, iterations=1)
+        # Draw with slight blur for anti-aliasing
+        edge_mask = edges > 0
+        result[edge_mask] = [255, 255, 255]
         
         # Racing line visualization removed - focusing on track detection only
         
