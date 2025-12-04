@@ -8,44 +8,40 @@
 
 ## 🤖 What is DriveOS?
 
-DriveOS is a **machine learning application** that trains neural networks to recognize racing lines in video footage. Unlike rule based systems that look for specific colors or patterns, DriveOS **learns** what optimal racing lines look like by studying annotated examples.
+DriveOS is a **deep learning application** that trains neural networks to detect racing track boundaries in real-time video footage. Inspired by comma.ai's openpilot lane detection system, DriveOS uses advanced computer vision to understand track geometry from a driver's perspective.
 
-### How DriveOS Uses Machine Learning
+### Architecture: Openpilot-Inspired Edge Detection
 
-**The Training Process (Why It's ML)**
+**Dual-Head Neural Network**
 
-1. **Data Annotation** - You use the built-in annotation tool to draw racing lines and track boundaries on video frames
-   - Yellow lines = optimal racing path through corners
-   - Red/blue lines = track boundaries
-   - This creates labeled training data (input: raw frame, output: racing line mask)
+1. **Track Segmentation Head** - U-Net architecture for drivable surface detection
+   - Encoder-decoder with skip connections for precise boundaries
+   - Outputs pixel-wise classification (track vs. non-track)
+   - Handles lighting variations and track surface changes
 
-2. **Neural Network Training** - DriveOS trains a U-Net model on your annotations
-   - The network has **millions of learnable parameters** across encoder-decoder layers
-   - Uses **supervised learning**: compares its predictions to your annotations
-   - Calculates loss (how wrong it is) and adjusts parameters via gradient descent
-   - After 50-100 epochs, the network learns patterns: "asphalt looks like this", "track boundaries follow these curves"
-   - **Skip connections** preserve spatial details from encoder to decoder for precise boundaries
-   - **This is machine learning** - the model discovers features automatically, not programmed
+2. **Edge Regression Head** - Direct coordinate prediction (like openpilot)
+   - Predicts left/right track edges as **3D coordinates in world space**
+   - **33 points per edge** with quadratic spacing (dense near, sparse far)
+   - X-coordinate: Distance ahead (0-50 meters)
+   - Y-coordinate: Lateral offset from center (meters)
+   - Mixture Density Network outputs with uncertainty estimation
 
-3. **Temporal Understanding** - LSTM networks add sequential awareness
-   - Tracks the last 60 frames (~2 seconds) of racing line history
-   - Learns motion patterns: how racing lines flow through corner sequences
-   - Smooths predictions by understanding context from previous frames
-4. **Inference** - The trained model analyzes new footage
-   - Processes each frame through the neural network (forward pass)
-   - Outputs pixel-wise predictions: probability each pixel is part of the track
-   - Applies advanced post-processing: morphological operations, connected component filtering
-   - Combines spatial (U-Net) and temporal (LSTM + 5-frame voting) for smooth, stable output
-   - Distance transform creates gradient overlay for depth visualization
-**Why This is Machine Learning:**
-- **Pattern discovery** - U-Net finds features (track edges, surface texture) automatically from data
-- **Generalization** - After training on 50-100 frames, works on thousands of new frames
-- **Gradient-based optimization** - Uses backpropagation to minimize prediction error
-- **Skip connections** - Preserves fine spatial details for precise boundary detection
-- **Trainable** - Performance improves as you add more annotated examples
-- **Adaptive learning** - Learns track-specific characteristics (lighting, surface type, camera angle)iction error
-- **Transfer learning** - Starts with ResNet50 pre-trained on ImageNet (object recognition)
-- **Trainable** - Performance improves as you add more annotated examples
+**Why This Approach Works:**
+
+- **3D World Coordinates** - Unlike pixel-based methods that bunch at image horizon, world-space coordinates naturally spread points based on actual track distance
+- **Explicit Supervision** - Model learns exact edge positions rather than deriving them from segmentation masks
+- **Temporal Smoothing** - Exponential moving average (EMA) with α=0.7 for stable, jitter-free edges
+- **Uncertainty Aware** - Confidence scores allow filtering of unreliable predictions
+
+**Training Process:**
+
+1. **Data Annotation** - Built-in tool to label track boundaries
+2. **Edge Label Generation** - Automatically converts segmentation masks to 3D edge coordinates
+3. **Multi-Task Learning** - Trains both segmentation and edge regression simultaneously
+4. **Edge Coordinate Loss** - L1 loss on (X,Y) positions + confidence classification
+5. **Inference** - Real-time prediction with temporal smoothing for production-quality results
+
+**Key Innovation:** Following openpilot's proven approach of predicting explicit coordinates in world space rather than pixel space eliminates the "horizon bunching" problem common in image-based lane detection
 
 ## 🚀 Quick Start
 
@@ -76,17 +72,18 @@ The installer automatically handles everything - Python environment, dependencie
   - Screen capture (perfect for sim racing!)
 
 - **🤖 AI-Powered Analysis:**
-  - U-Net architecture with skip connections for precise track detection
-  - LSTM for temporal smoothing
-  - Real-time track surface segmentation
-  - Advanced morphological processing for clean boundaries
-  - Multi-factor component scoring for fragment filtering
+  - Dual-head architecture: U-Net segmentation + Edge regression
+  - Openpilot-inspired 3D coordinate prediction (world-space, not pixel-space)
+  - 33-point edge detection with quadratic spacing (0-50m ahead)
+  - Mixture Density Network with uncertainty estimation
+  - Temporal smoothing (EMA α=0.7) for stable predictions
 
 - **📊 Visual Feedback:**
-  - Green gradient overlay = Detected track surface (brighter toward center)
-  - White boundaries = Track edges with anti-aliasing
-  - Wide, square-edged track coverage
-  - Confidence and inference time display
+  - Green overlay = Detected track surface
+  - White polylines = Left/right track edges in world coordinates
+  - Edge confidence scores (L/R) displayed
+  - Real-time inference time monitoring
+  - Smooth, jitter-free edge tracking
 
 - **🎯 Professional GUI:**
   - Easy to use interface
@@ -139,14 +136,19 @@ DriveOS supports **screen capture**, making it perfect for analyzing your sim ra
 
 ### Create Training Data
 1. **"Create Training Data"** tab → Select video → **"Launch Annotation Tool"**
-2. Draw racing line (yellow), left boundary (red), right boundary (blue)
+2. Draw track boundaries: left edge (red), right edge (blue)
 3. Press **SPACE** to save frame, **Q** when done
 4. Annotate 50-100 diverse frames for best results
 
 ### Train Custom Model
-1. **"Train Model"** tab → Select training data
-2. Adjust parameters (epochs, batch size, learning rate)
-3. Click **"Start Training"** (3-5 min GPU, 30-60 min CPU)
+1. **"Train Model"** tab → Select training data directory
+2. Set environment variables (or use defaults):
+   - `USE_EDGE_HEAD=true` - Enable openpilot-style edge regression
+   - `EDGE_LOSS_WEIGHT=1.0` - Weight for edge coordinate loss
+   - `EDGE_CONF_WEIGHT=0.5` - Weight for edge confidence loss
+3. Adjust parameters (epochs: 50-100, batch size: 4-8)
+4. Click **"Start Training"** (5-10 min GPU, 30-60 min CPU)
+5. Edge labels auto-generated from segmentation masks before training
 
 ## 🛠️ Manual Installation (Developers)
 
@@ -165,27 +167,44 @@ python launchers/launch_gui.py
 
 ## 🧠 Technical Details
 
-**Architecture:** U-Net with encoder-decoder + skip connections + LSTM for temporal consistency
+**Architecture:** Dual-head U-Net inspired by comma.ai's openpilot vision model
 
-**Model Details:**
-- **Encoder:** 5 downsampling blocks (base 64 filters, up to 1024)
+**Segmentation Head:**
+- **Encoder:** 5 downsampling blocks (64→1024 filters)
 - **Decoder:** 4 upsampling blocks with skip connections
-- **Processing:** Bilateral filtering + morphological operations (RECT kernels for square edges)
-- **Segmentation:** 3 classes (track, racing_line, off_track)
-- **Post-processing:** Connected component analysis with multi-factor scoring
-- **Temporal:** 5-frame voting buffer for stability
+- **Output:** Track surface segmentation (2 classes)
+
+**Edge Regression Head (Openpilot-Style):**
+- **Input:** Multi-scale features from U-Net encoder
+- **Output:** 2 edges × 33 points × 2 coordinates (X, Y)
+- **Coordinate System:**
+  - X: Distance ahead (0-50m, quadratic spacing)
+  - Y: Lateral offset from center (meters)
+- **Uncertainty:** Per-point std deviations + edge confidence scores
+- **Loss:** L1 on coordinates + BCE on confidence
+
+**Training:**
+- **Multi-task loss:** Segmentation (BCE) + Edge coordinates (L1 + confidence)
+- **Loss weights:** Seg=1.0, Edge=1.0, Confidence=0.5
+- **Data:** Auto-generated edge labels from segmentation masks
+- **Optimizer:** Adam with learning rate scheduling
+
+**Inference Pipeline:**
+1. Forward pass through dual-head network
+2. Temporal smoothing: EMA (α=0.7) on edge coordinates
+3. Convert world coordinates to pixel space for visualization
+4. Render track overlay + edge polylines
 
 **Performance:**
-- **CPU:** 5-10 FPS, ~100-200ms/frame, good for post-analysis
-- **GPU:** 30-60 FPS, ~15-30ms/frame, 10-20x faster training
+- **CPU:** ~175-200ms/frame (5 FPS)
+- **GPU:** ~15-30ms/frame (30-60 FPS)
+- **Model size:** 320×320 input → any output resolution
 
-**Processing:** 320x320 model resolution, outputs at input resolution (720p/1080p/4K)
-
-**Advanced Features:**
-- Distance transform for gradient overlay
-- Adaptive component selection (area + position + width + centering)
-- Multi-stage morphological cleanup
-- Anti-aliased boundaries
+**Key Advantages:**
+- World-space coordinates eliminate horizon bunching
+- Explicit edge supervision improves boundary accuracy
+- Temporal smoothing provides production-quality stability
+- Uncertainty-aware predictions for reliability filtering
 
 ## 📄 License
 

@@ -251,12 +251,22 @@ class InferenceEngine:
                 poly_pts = []
                 
                 for point_idx in range(len(edge_points)):
-                    lateral_norm, height_norm = edge_points[point_idx]
+                    distance_ahead, lateral_offset = edge_points[point_idx]
                     
-                    # Convert normalized coords to pixel coords
-                    lateral_pixels = int(lateral_norm * (w / 2.0))
-                    x = center_x + lateral_pixels
-                    y = int(h * height_norm)  # height_norm=0 -> top, height_norm=1 -> bottom
+                    # Convert 3D world coords to 2D pixel coords
+                    # distance_ahead: 0-50m -> map to image y (bottom to top)
+                    # lateral_offset: meters -> pixels from center
+                    
+                    max_distance = 50.0
+                    road_width = 10.0
+                    
+                    # Map distance to y pixel (perspective: near=bottom, far=top)
+                    y_norm = 1.0 - (distance_ahead / max_distance)
+                    y = int(h * np.clip(y_norm, 0, 1))
+                    
+                    # Map lateral offset to x pixel
+                    x_offset = lateral_offset * (w / road_width)
+                    x = int(center_x + x_offset)
                     
                     # Bounds check
                     if 0 <= x < w and 0 <= y < h:

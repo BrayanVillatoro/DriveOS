@@ -62,42 +62,44 @@ def extract_edge_polylines_from_mask(mask: np.ndarray,
     left_pts = left_pts[np.argsort(left_pts[:, 1])]
     right_pts = right_pts[np.argsort(right_pts[:, 1])]
     
-    # Sample points evenly with quadratic spacing
-    # (denser near bottom/car, sparser far ahead)
-    def sample_edge(pts, n_samples):
-        if len(pts) < n_samples:
-            # Interpolate if not enough points
-            indices = np.linspace(0, len(pts) - 1, n_samples)
-            indices_int = indices.astype(int)
-            return pts[indices_int]
-        else:
-            # Use quadratic spacing for sampling
-            max_idx = len(pts) - 1
-            indices = [int(max_idx * (1 - (i / (n_samples - 1))**2)) for i in range(n_samples)]
-            indices = np.clip(indices, 0, max_idx)
-            return pts[indices]
+    # Openpilot-style: Use distance ahead (X_IDXS) instead of pixel heights
+    # X_IDXS with quadratic spacing: denser near car, sparser far ahead
+    max_distance = 50.0  # meters ahead visible in racing
+    X_IDXS = np.array([max_distance * ((i / (num_points - 1))**2) for i in range(num_points)])
     
-    left_edge_pts = sample_edge(left_pts, num_points)
-    right_edge_pts = sample_edge(right_pts, num_points)
+    def sample_edge_at_distances(pts, distances, img_h):
+        """Sample edge points at specific distances (converted from y pixel rows)"""
+        # Convert y pixels to approximate distance
+        # Assume perspective: bottom of image = 0m, top = max_distance
+        y_coords = pts[:, 1]
+        x_coords = pts[:, 0]
+        
+        # Map y pixels to distance (0=bottom/near, img_h=top/far)
+        pt_distances = max_distance * (1.0 - y_coords / img_h)
+        
+        # Interpolate x coordinates at desired distances
+        sampled_x = np.interp(distances, pt_distances[::-1], x_coords[::-1])
+        return sampled_x
     
-    # Convert to normalized coordinates
-    # x -> lateral offset from center (in pixels, then normalize to meters)
-    # y -> height (in pixels from bottom, normalized)
+    left_x = sample_edge_at_distances(left_pts, X_IDXS, img_height)
+    right_x = sample_edge_at_distances(right_pts, X_IDXS, img_height)
     
-    def normalize_edge(pts):
+    # Convert to openpilot format: (X, Y) coordinates
+    # X = distance ahead (already have as X_IDXS)
+    # Y = lateral offset from center in meters
+    
+    def normalize_edge(x_coords):
         # Lateral offset: x position relative to center
-        lateral_offset = pts[:, 0] - center_x
-        # Normalize to [-1, 1] range representing +/- 10m
-        lateral_offset_norm = lateral_offset / (img_width / 2.0)
+        lateral_offset = x_coords - center_x
+        # Convert pixels to meters (assume ~3.7m road width = image width)
+        road_width = 10.0  # meters
+        lateral_offset_m = lateral_offset * (road_width / img_width)
         
-        # Height: y position normalized (0=top of image, 1=bottom)
-        # This matches how images are indexed: y=0 is top row
-        height = pts[:, 1] / img_height
-        
-        return np.stack([lateral_offset_norm, height], axis=1)
+        # Stack: [distance_ahead, lateral_offset]
+        return np.stack([X_IDXS, lateral_offset_m], axis=1)
     
-    left_edge_norm = normalize_edge(left_edge_pts)
-    right_edge_norm = normalize_edge(right_edge_pts)
+    left_edge_norm = normalize_edge(left_x)
+    right_edge_norm = normalize_edge(right_x)
     
     return left_edge_norm, right_edge_norm
 
