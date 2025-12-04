@@ -67,6 +67,23 @@ class Config:
     
     # Model architecture selection
     USE_UNET: bool = os.getenv("USE_UNET", "false").lower() == "true"  # Use U-Net instead of DeepLabV3
+
+    # Visualization toggles
+    SHOW_EDGE_LINES: bool = os.getenv("SHOW_EDGE_LINES", "true").lower() == "true"
+    HORIZON_ROW_RATIO: float = float(os.getenv("HORIZON_ROW_RATIO", "0.40"))
+
+    # Training boundary-aware loss
+    USE_BOUNDARY_LOSS: bool = os.getenv("USE_BOUNDARY_LOSS", "true").lower() == "true"
+    BOUNDARY_LOSS_WEIGHT: float = float(os.getenv("BOUNDARY_LOSS_WEIGHT", "0.2"))
+    
+    # openpilot-inspired edge regression
+    USE_EDGE_HEAD: bool = os.getenv("USE_EDGE_HEAD", "true").lower() == "true"
+    EDGE_LOSS_WEIGHT: float = float(os.getenv("EDGE_LOSS_WEIGHT", "1.0"))
+    EDGE_CONF_WEIGHT: float = float(os.getenv("EDGE_CONF_WEIGHT", "0.5"))
+
+    # Visualization toggles
+    SHOW_EDGE_LINES: bool = os.getenv("SHOW_EDGE_LINES", "true").lower() == "true"
+    HORIZON_ROW_RATIO: float = float(os.getenv("HORIZON_ROW_RATIO", "0.40"))  # keep lower 60% as drivable ROI
     
     @classmethod
     def get_device(cls):

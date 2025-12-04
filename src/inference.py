@@ -24,9 +24,10 @@ class InferenceEngine:
         else:
             self.device = torch.device(device)
         
-        # Always use U-Net architecture
-        self.model = RacingLineOptimizer(use_unet=True)
-        logger.info("Using U-Net architecture")
+        # Use openpilot-inspired architecture with edge regression
+        use_edge_head = bool(getattr(config, 'USE_EDGE_HEAD', True))
+        self.model = RacingLineOptimizer(use_unet=True, use_edge_head=use_edge_head)
+        logger.info(f"Using U-Net + Edge Regression (edge_head={use_edge_head})")
         
         # Load model weights
         if model_path:
@@ -98,6 +99,10 @@ class InferenceEngine:
         self.prev_track_mask = None
         self.mask_history = []  # Store last N masks
         self.mask_history_size = 5
+        
+        # Edge coordinate smoothing (EMA)
+        self.prev_edges = None
+        self.edge_alpha = 0.7  # Higher = more current frame weight
 
     def preprocess_image(self, frame: np.ndarray) -> torch.Tensor:
         """
@@ -158,7 +163,7 @@ class InferenceEngine:
         
         # Inference
         start_time = time.time()
-        optimal_line, seg_map, confidence = self.model(image_tensor, telemetry_tensor)
+        optimal_line, seg_map, confidence, edge_outputs = self.model(image_tensor, telemetry_tensor)
         inference_time = (time.time() - start_time) * 1000
         
         # Post-process
@@ -182,213 +187,98 @@ class InferenceEngine:
         confidence_np = confidence[0, 0].cpu().numpy()
         optimal_line_np = optimal_line[0].cpu().numpy()
         
+        # Extract and smooth edge coordinates
+        edges_np = None
+        edge_probs_np = None
+        if edge_outputs is not None:
+            edges_np = edge_outputs['edges'][0].cpu().numpy()  # [2, 33, 2]
+            edge_probs_np = edge_outputs['edge_probs'][0].cpu().numpy()  # [2]
+            
+            # Temporal smoothing with EMA
+            if self.prev_edges is not None:
+                edges_np = self.edge_alpha * edges_np + (1 - self.edge_alpha) * self.prev_edges
+            self.prev_edges = edges_np.copy()
+        
         return {
             'optimal_line': optimal_line_np,
             'segmentation': seg_map_np,
             'confidence': confidence_np,
+            'edges': edges_np,  # [2, 33, 2] or None
+            'edge_probs': edge_probs_np,  # [2] or None
             'inference_time_ms': inference_time
         }
     
     def visualize_prediction(self, frame: np.ndarray, prediction: Dict) -> np.ndarray:
-        """Clean visualization with track surface, racing line, and speed coloring"""
+        """openpilot-style visualization with edge regression"""
+        from .edge_constants import EdgeConstants
+        
         result = frame.copy()
         h, w = frame.shape[:2]
         
-        # Resize segmentation to frame size
+        # Simple track overlay from segmentation
         seg_map = cv2.resize(
             prediction['segmentation'].astype(np.uint8),
             (w, h),
-            interpolation=cv2.INTER_LINEAR  # Smoother interpolation
+            interpolation=cv2.INTER_LINEAR
         )
         
-        # Apply bilateral filter to preserve edges while smoothing
-        seg_map = cv2.bilateralFilter(seg_map, 5, 50, 50)
+        # Simple track mask (class 1 = track, not 0)
+        track_mask = (seg_map == 1).astype(np.uint8)
         
-        # IMPROVED: Multi-class track detection with connected component analysis
-        # Try both class 0 and non-zero classes to find track surface
-        track_mask_class0 = (seg_map == 0).astype(np.uint8)
-        track_mask_nonzero = (seg_map != 0).astype(np.uint8)
+        # Basic cleanup
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel)
         
-        # Use whichever has less coverage (track is usually smaller than background)
-        if np.sum(track_mask_class0) < np.sum(track_mask_nonzero):
-            track_mask = track_mask_class0
-        else:
-            track_mask = track_mask_nonzero
-        
-        # Apply morphological gradient to enhance boundaries
-        kernel_enhance = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        gradient = cv2.morphologyEx(track_mask, cv2.MORPH_GRADIENT, kernel_enhance)
-        track_mask = cv2.add(track_mask, gradient)
-        
-        # IMPROVED: Multi-stage morphological operations for wider, cleaner coverage
-        # Stage 1: Remove small noise first
-        kernel_denoise = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_OPEN, kernel_denoise)
-        
-        # Stage 2: Close small gaps before expansion
-        kernel_close_small = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
-        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_close_small, iterations=2)
-        
-        # Stage 3: Expand track area significantly with rectangular kernel
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (30, 30))
-        track_mask = cv2.dilate(track_mask, kernel_dilate, iterations=3)
-        
-        # Stage 4: Final closing to fill any remaining gaps
-        kernel_close_large = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
-        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_close_large, iterations=2)
-        
-        # IMPROVED: Connected component analysis to select main track region
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(track_mask, connectivity=8)
-        
-        if num_labels > 1:  # More than just background
-            # Filter components by size, position, and aspect ratio
-            valid_components = []
-            for i in range(1, num_labels):  # Skip background (0)
-                area = stats[i, cv2.CC_STAT_AREA]
-                x = stats[i, cv2.CC_STAT_LEFT]
-                y = stats[i, cv2.CC_STAT_TOP]
-                width = stats[i, cv2.CC_STAT_WIDTH]
-                height = stats[i, cv2.CC_STAT_HEIGHT]
-                cx, cy = int(centroids[i][0]), int(centroids[i][1])
-                
-                # Require substantial area (remove fragments)
-                min_area = (w * h) * 0.05  # At least 5% of frame
-                if area > min_area:
-                    # Multi-factor scoring:
-                    # 1. Area (larger is better)
-                    area_score = area / (w * h)
-                    # 2. Position (lower in frame is better for track)
-                    position_score = (cy / h) ** 0.5
-                    # 3. Width (wider components more likely to be track)
-                    width_score = (width / w) ** 0.5
-                    # 4. Horizontal centering (track usually centered)
-                    center_score = 1.0 - abs((cx / w) - 0.5)
-                    
-                    total_score = area_score * 2.0 + position_score * 1.5 + width_score * 1.0 + center_score * 0.5
-                    valid_components.append((i, total_score))
-            
-            # Select best component
-            if valid_components:
-                valid_components.sort(key=lambda x: x[1], reverse=True)
-                main_component_id = valid_components[0][0]
-                track_mask = (labels == main_component_id).astype(np.uint8)
-            else:
-                # Fallback: use largest component
-                sizes = stats[1:, cv2.CC_STAT_AREA]
-                if len(sizes) > 0:
-                    largest_id = np.argmax(sizes) + 1
-                    track_mask = (labels == largest_id).astype(np.uint8)
-        
-        # Final refinement with rectangular kernel for sharp, clean edges
-        kernel_smooth = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-        track_mask = cv2.morphologyEx(track_mask, cv2.MORPH_CLOSE, kernel_smooth)
-        
-        # Optional: Apply slight gaussian blur to track edges for anti-aliasing
-        track_mask_float = track_mask.astype(np.float32)
-        track_mask_float = cv2.GaussianBlur(track_mask_float, (5, 5), 0)
-        track_mask = (track_mask_float > 0.5).astype(np.uint8)
-
-        # Horizon/ROI clamp: ignore predictions too high in the frame
-        # This reduces "up ahead" highlighting when confidence is low.
-        horizon_row = int(h * 0.4)  # keep lower 60% of the frame as drivable ROI
-        track_mask[:horizon_row, :] = 0
-        
-        # Enhanced visualization with gradient overlay for depth
+        # Green overlay
         track_overlay = np.zeros_like(frame)
-        # Create distance transform for gradient effect (brighter at center)
-        dist_transform = cv2.distanceTransform(track_mask, cv2.DIST_L2, 5)
-        dist_normalized = cv2.normalize(dist_transform, None, 0, 1, cv2.NORM_MINMAX)
+        track_overlay[:, :, 1] = track_mask * 180  # Green channel
+        result = cv2.addWeighted(result, 0.7, track_overlay, 0.3, 0)
         
-        # Apply green color with intensity based on distance from edge
-        for c in range(3):
-            track_overlay[:, :, c] = track_mask * (90 if c == 0 else 200 if c == 1 else 90)
-            # Add gradient intensity (brighter toward center)
-            track_overlay[:, :, c] = np.minimum(255, track_overlay[:, :, c] * (0.7 + 0.3 * dist_normalized))
+        # Draw edge regression predictions (openpilot-style)
+        show_edges = bool(getattr(config, 'SHOW_EDGE_LINES', True))
+        if show_edges and prediction.get('edges') is not None:
+            edges = prediction['edges']  # [2, 33, 2] (left/right, points, y_offset/height)
+            edge_probs = prediction.get('edge_probs', np.array([1.0, 1.0]))  # [2]
+            
+            conf_threshold = float(getattr(config, 'EDGE_CONF_THRESHOLD', 0.3))
+            center_x = w // 2
+            
+            for edge_idx in range(2):  # left=0, right=1
+                if edge_probs[edge_idx] < conf_threshold:
+                    continue  # Skip low-confidence edges
+                
+                edge_points = edges[edge_idx]  # [33, 2]
+                poly_pts = []
+                
+                for point_idx in range(len(edge_points)):
+                    lateral_norm, height_norm = edge_points[point_idx]
+                    
+                    # Convert normalized coords to pixel coords
+                    lateral_pixels = int(lateral_norm * (w / 2.0))
+                    x = center_x + lateral_pixels
+                    y = int(h * height_norm)  # height_norm=0 -> top, height_norm=1 -> bottom
+                    
+                    # Bounds check
+                    if 0 <= x < w and 0 <= y < h:
+                        poly_pts.append((x, y))
+                
+                # Draw white polyline for track edge
+                if len(poly_pts) > 5:
+                    pts_array = np.array(poly_pts, dtype=np.int32)
+                    cv2.polylines(result, [pts_array], False, (255, 255, 255), 2, lineType=cv2.LINE_AA)
         
-        result = cv2.addWeighted(result, 0.65, track_overlay.astype(np.uint8), 0.35, 0)
-        
-        # Draw clean white track boundaries with anti-aliasing
-        edges = cv2.Canny(track_mask * 255, 30, 100)
-        kernel_edge = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        edges = cv2.dilate(edges, kernel_edge, iterations=1)
-        edge_mask = edges > 0
-        result[edge_mask] = [255, 255, 255]
-
-        # Extract left/right track edge polylines for clearer visualization
-        # Strategy: for scanlines from bottom up, find contiguous drivable band
-        # around image center, then take its leftmost and rightmost x.
-        center_x = w // 2
-        ys = []
-        left_xs = []
-        right_xs = []
-        for y in range(h - 1, horizon_row, -4):  # step for speed and smoothness
-            row = track_mask[y]
-            if row.sum() < 10:
-                continue
-
-            # Find contiguous regions of ones
-            x_indices = np.where(row > 0)[0]
-            if x_indices.size == 0:
-                continue
-
-            # Split into segments where gaps > 3 pixels
-            segments = []
-            start = x_indices[0]
-            prev = start
-            for x in x_indices[1:]:
-                if x - prev > 3:
-                    segments.append((start, prev))
-                    start = x
-                prev = x
-            segments.append((start, prev))
-
-            # Pick segment whose center is closest to image center
-            best = None
-            best_dist = 1e9
-            for s, e in segments:
-                cx = (s + e) // 2
-                dist = abs(cx - center_x)
-                if e - s > 10 and dist < best_dist:
-                    best = (s, e)
-                    best_dist = dist
-
-            if best is None:
-                continue
-
-            ys.append(y)
-            left_xs.append(best[0])
-            right_xs.append(best[1])
-
-        # Smooth with a small moving average to reduce jitter
-        def smooth_poly(xs, ys, k=5):
-            if len(xs) < 3:
-                return None
-            xs_sm = []
-            ys_sm = []
-            for i in range(len(xs)):
-                i0 = max(0, i - k)
-                i1 = min(len(xs), i + k + 1)
-                xs_sm.append(int(np.mean(xs[i0:i1])))
-                ys_sm.append(int(np.mean(ys[i0:i1])))
-            return list(zip(xs_sm, ys_sm))
-
-        left_poly = smooth_poly(left_xs, ys, k=3)
-        right_poly = smooth_poly(right_xs, ys, k=3)
-
-        # Draw polylines (white) with anti-aliasing
-        if left_poly and len(left_poly) > 4:
-            cv2.polylines(result, [np.array(left_poly, dtype=np.int32)], False, (255, 255, 255), 2, lineType=cv2.LINE_AA)
-        if right_poly and len(right_poly) > 4:
-            cv2.polylines(result, [np.array(right_poly, dtype=np.int32)], False, (255, 255, 255), 2, lineType=cv2.LINE_AA)
-        
-        # Racing line visualization removed - focusing on track detection only
-        
-        # Add minimal info overlay
+        # Add info overlay
         confidence = float(np.mean(prediction['confidence']))
         cv2.putText(result, f"Confidence: {confidence:.2f}", (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.putText(result, f"Inference: {prediction['inference_time_ms']:.1f}ms", 
                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # Show edge confidence if available
+        if prediction.get('edge_probs') is not None:
+            edge_probs = prediction['edge_probs']
+            cv2.putText(result, f"Edge L/R: {edge_probs[0]:.2f} / {edge_probs[1]:.2f}", 
+                       (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
         return result
 

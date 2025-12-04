@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class RacingLineDataset(Dataset):
-    """Dataset for racing line detection training"""
+    """Dataset for racing line detection training with edge annotations"""
     
     def __init__(self, data_dir: str, split: str = 'train'):
         """
@@ -33,6 +33,17 @@ class RacingLineDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.image_dir = self.data_dir / 'images'
         self.mask_dir = self.data_dir / 'masks'
+        
+        # Load edge annotations if available
+        edge_json_path = self.data_dir / 'edge_annotations.json'
+        self.edge_annotations = {}
+        if edge_json_path.exists():
+            try:
+                with open(edge_json_path, 'r') as f:
+                    self.edge_annotations = json.load(f)
+                logger.info(f"Loaded edge annotations: {len(self.edge_annotations)} frames")
+            except Exception as e:
+                logger.warning(f"Could not load edge annotations: {e}")
         
         # Get all image files
         self.image_files = sorted(list(self.image_dir.glob('*.jpg')))
@@ -52,7 +63,7 @@ class RacingLineDataset(Dataset):
     def __len__(self) -> int:
         return len(self.image_files)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Get training sample
         
@@ -60,6 +71,7 @@ class RacingLineDataset(Dataset):
             image: Input image tensor [3, H, W]
             mask: Segmentation mask tensor [H, W]
             racing_line: Racing line coordinates [2] (x, y normalized to [-1, 1])
+            edges: Edge coordinates [2, 33, 2] or zeros if not available
         """
         # Load image
         img_path = self.image_files[idx]
@@ -143,12 +155,25 @@ class RacingLineDataset(Dataset):
             # Default to center if no racing line detected
             racing_line_x, racing_line_y = 0.0, 0.0
         
+        # Load edge annotations if available
+        frame_id = img_path.stem
+        if frame_id in self.edge_annotations:
+            edge_data = self.edge_annotations[frame_id]
+            left_edge = np.array(edge_data['left_edge'], dtype=np.float32)
+            right_edge = np.array(edge_data['right_edge'], dtype=np.float32)
+            edges = np.stack([left_edge, right_edge], axis=0)  # [2, 33, 2]
+        else:
+            # No edge annotations - create zeros placeholder
+            from .edge_constants import EdgeConstants
+            edges = np.zeros((EdgeConstants.NUM_ROAD_EDGES, EdgeConstants.IDX_N, EdgeConstants.EDGE_WIDTH), dtype=np.float32)
+        
         # Convert to tensors
         image_tensor = torch.from_numpy(image).permute(2, 0, 1).float() / 255.0
         mask_tensor = torch.from_numpy(mask).long()
         racing_line_tensor = torch.tensor([racing_line_x, racing_line_y], dtype=torch.float32)
+        edges_tensor = torch.from_numpy(edges).float()
         
-        return image_tensor, mask_tensor, racing_line_tensor
+        return image_tensor, mask_tensor, racing_line_tensor, edges_tensor
 
 
 def train_model(data_dir: str, 
@@ -210,9 +235,10 @@ def train_model(data_dir: str,
     
     # Create model
     logger.info("Creating model...")
-    # Use U-Net architecture
-    model = RacingLineOptimizer(use_unet=True)
-    logger.info("Training with U-Net architecture")
+    # Use U-Net architecture with edge regression head
+    use_edge_head = bool(getattr(config, 'USE_EDGE_HEAD', True))
+    model = RacingLineOptimizer(use_unet=True, use_edge_head=use_edge_head)
+    logger.info(f"Training with U-Net architecture (edge_head={use_edge_head})")
     trainer = ModelTrainer(model, device)
     
     # Setup optimizer
@@ -233,6 +259,68 @@ def train_model(data_dir: str,
         criterion_seg = nn.CrossEntropyLoss()
     criterion_line = nn.MSELoss()
     
+    # Edge coordinate loss
+    use_edge_loss = use_edge_head and len(train_dataset.edge_annotations) > 0
+    edge_weight = float(getattr(config, 'EDGE_LOSS_WEIGHT', 1.0))
+    edge_conf_weight = float(getattr(config, 'EDGE_CONF_WEIGHT', 0.5))
+    
+    def edge_coordinate_loss(pred_edges, gt_edges, edge_probs=None):
+        """L1 loss on edge coordinates with optional confidence weighting"""
+        if not use_edge_loss:
+            return torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+        
+        # Check if GT edges are non-zero (valid)
+        valid_mask = (gt_edges.abs().sum(dim=-1) > 0).float()  # [B, 2, 33]
+        
+        if valid_mask.sum() == 0:
+            return torch.tensor(0.0, device=device), torch.tensor(0.0, device=device)
+        
+        # Coordinate L1 loss
+        coord_diff = torch.abs(pred_edges - gt_edges)
+        masked_diff = coord_diff * valid_mask.unsqueeze(-1)
+        coord_loss = masked_diff.sum() / (valid_mask.sum() + 1e-6)
+        
+        # Edge confidence loss (BCE with valid edges as positive)
+        conf_loss = torch.tensor(0.0, device=device)
+        if edge_probs is not None:
+            valid_edges = valid_mask.max(dim=-1)[0]  # [B, 2]
+            conf_loss = nn.functional.binary_cross_entropy(edge_probs, valid_edges)
+        
+        return coord_loss, conf_loss
+
+    # Optional: boundary-aware loss to sharpen edges
+    use_boundary_loss = bool(getattr(config, 'USE_BOUNDARY_LOSS', False))
+    boundary_weight = float(getattr(config, 'BOUNDARY_LOSS_WEIGHT', 0.2))
+    horizon_ratio = float(getattr(config, 'HORIZON_ROW_RATIO', 0.40))
+    
+    logger.info(f"Loss configuration: edge={use_edge_loss}, boundary={use_boundary_loss}")
+
+    def boundary_loss_fn(seg_logits, masks):
+        # seg_logits: [B, C, H, W], masks: [B, H, W]
+        if not use_boundary_loss:
+            return torch.tensor(0.0, device=device)
+        with torch.no_grad():
+            # Focus on road vs background for boundary extraction
+            road_pred = torch.softmax(seg_logits, dim=1)[:, 0]  # class 0 assumed road
+            road_gt = (masks == 0).float()
+            # Clamp to lower ROI
+            B, H, W = road_gt.shape
+            horizon = int(H * horizon_ratio)
+            road_pred[:, :horizon, :] = 0
+            road_gt[:, :horizon, :] = 0
+            # Sobel edges
+            def sobel(x):
+                kx = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32, device=device).view(1,1,3,3)
+                ky = torch.tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]], dtype=torch.float32, device=device).view(1,1,3,3)
+                x = x.unsqueeze(1)
+                gx = torch.nn.functional.conv2d(x, kx, padding=1)
+                gy = torch.nn.functional.conv2d(x, ky, padding=1)
+                return torch.sqrt(gx**2 + gy**2 + 1e-6).squeeze(1)
+            pred_edges = sobel(road_pred)
+            gt_edges = sobel(road_gt)
+        # L1 between edge maps
+        return torch.mean(torch.abs(pred_edges - gt_edges))
+    
     # Training loop
     logger.info(f"Starting training for {epochs} epochs...")
     best_val_loss = float('inf')
@@ -245,25 +333,41 @@ def train_model(data_dir: str,
         train_line_loss = 0
         
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
-        for images, masks, racing_lines in pbar:
+        for batch_data in pbar:
+            images, masks, racing_lines, gt_edges = batch_data
             images = images.to(device)
             masks = masks.to(device)
             racing_lines = racing_lines.to(device)
+            gt_edges = gt_edges.to(device)
             
             # Create dummy telemetry (all zeros for now)
-            batch_size = images.size(0)
-            telemetry = torch.zeros(batch_size, 10, 7).to(device)
+            batch_size_iter = images.size(0)
+            telemetry = torch.zeros(batch_size_iter, 10, 7).to(device)
             
             # Forward pass
             optimizer.zero_grad()
-            predictions, seg_maps, confidence = model(images, telemetry)
+            predictions, seg_maps, confidence, edge_outputs = model(images, telemetry)
             
             # Calculate losses
             seg_loss = criterion_seg(seg_maps, masks)
             line_loss = criterion_line(predictions, racing_lines)
             
+            # Edge coordinate loss
+            edge_coord_loss = torch.tensor(0.0, device=device)
+            edge_conf_loss = torch.tensor(0.0, device=device)
+            if edge_outputs is not None:
+                edge_coord_loss, edge_conf_loss = edge_coordinate_loss(
+                    edge_outputs['edges'], gt_edges, edge_outputs['edge_probs']
+                )
+            
+            # Boundary-aware loss
+            b_loss = boundary_loss_fn(seg_maps, masks)
+            
             # Combined loss
-            loss = seg_loss + line_loss
+            loss = (seg_loss + line_loss + 
+                   boundary_weight * b_loss + 
+                   edge_weight * edge_coord_loss + 
+                   edge_conf_weight * edge_conf_loss)
             
             # Backward pass
             loss.backward()
@@ -274,11 +378,16 @@ def train_model(data_dir: str,
             train_seg_loss += seg_loss.item()
             train_line_loss += line_loss.item()
             
-            pbar.set_postfix({
+            metrics = {
                 'loss': f'{loss.item():.4f}',
                 'seg': f'{seg_loss.item():.4f}',
                 'line': f'{line_loss.item():.4f}'
-            })
+            }
+            if use_boundary_loss:
+                metrics['bdry'] = f'{b_loss.item():.4f}'
+            if use_edge_loss and edge_outputs is not None:
+                metrics['edge'] = f'{edge_coord_loss.item():.4f}'
+            pbar.set_postfix(metrics)
         
         # Average training losses
         train_loss /= len(train_loader)
@@ -292,19 +401,33 @@ def train_model(data_dir: str,
         val_line_loss = 0
         
         with torch.no_grad():
-            for images, masks, racing_lines in val_loader:
+            for batch_data in val_loader:
+                images, masks, racing_lines, gt_edges = batch_data
                 images = images.to(device)
                 masks = masks.to(device)
                 racing_lines = racing_lines.to(device)
+                gt_edges = gt_edges.to(device)
                 
-                batch_size = images.size(0)
-                telemetry = torch.zeros(batch_size, 10, 7).to(device)
+                batch_size_val = images.size(0)
+                telemetry = torch.zeros(batch_size_val, 10, 7).to(device)
                 
-                predictions, seg_maps, confidence = model(images, telemetry)
+                predictions, seg_maps, confidence, edge_outputs = model(images, telemetry)
                 
                 seg_loss = criterion_seg(seg_maps, masks)
                 line_loss = criterion_line(predictions, racing_lines)
-                loss = seg_loss + line_loss
+                
+                edge_coord_loss_val = torch.tensor(0.0, device=device)
+                edge_conf_loss_val = torch.tensor(0.0, device=device)
+                if edge_outputs is not None:
+                    edge_coord_loss_val, edge_conf_loss_val = edge_coordinate_loss(
+                        edge_outputs['edges'], gt_edges, edge_outputs['edge_probs']
+                    )
+                
+                b_loss = boundary_loss_fn(seg_maps, masks)
+                loss = (seg_loss + line_loss + 
+                       boundary_weight * b_loss + 
+                       edge_weight * edge_coord_loss_val + 
+                       edge_conf_weight * edge_conf_loss_val)
                 
                 val_loss += loss.item()
                 val_seg_loss += seg_loss.item()

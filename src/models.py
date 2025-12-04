@@ -5,8 +5,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 import logging
+
+from .edge_constants import EdgeConstants
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,120 @@ class UNet(nn.Module):
         out = self.out_conv(dec1)
         
         return out
+    
+    def get_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract intermediate features for edge regression"""
+        # Encoder path
+        enc1 = self.enc1(x)
+        enc2 = self.enc2(self.pool(enc1))
+        enc3 = self.enc3(self.pool(enc2))
+        enc4 = self.enc4(self.pool(enc3))
+        
+        # Bottleneck
+        bottleneck = self.bottleneck(self.pool(enc4))
+        
+        # Decoder path up to dec3 for multi-scale features
+        dec4 = self.upconv4(bottleneck)
+        dec4 = torch.cat([dec4, enc4], dim=1)
+        dec4 = self.dec4(dec4)
+        
+        dec3 = self.upconv3(dec4)
+        dec3 = torch.cat([dec3, enc3], dim=1)
+        dec3 = self.dec3(dec3)
+        
+        return dec3  # Return multi-scale features
+
+
+class EdgeRegressionHead(nn.Module):
+    """
+    openpilot-inspired edge regression head
+    Predicts explicit (x, y) coordinates for left/right road edges
+    """
+    
+    def __init__(self, in_channels: int = 256, base_filters: int = 128):
+        super(EdgeRegressionHead, self).__init__()
+        
+        # Feature processing
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_channels, base_filters, kernel_size=3, padding=1),
+            nn.BatchNorm2d(base_filters),
+            nn.ReLU(inplace=True)
+        )
+        
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(base_filters, base_filters // 2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(base_filters // 2),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Global pooling + FC for edge coordinates
+        self.pool = nn.AdaptiveAvgPool2d((4, 4))
+        
+        fc_input_size = (base_filters // 2) * 4 * 4
+        
+        # Output: [left_edge, right_edge] × 33 points × 2 coords (y_offset, z_height)
+        # Total: 2 * 33 * 2 = 132 values
+        edge_output_size = EdgeConstants.NUM_ROAD_EDGES * EdgeConstants.IDX_N * EdgeConstants.EDGE_WIDTH
+        
+        self.edge_predictor = nn.Sequential(
+            nn.Linear(fc_input_size, 512),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, edge_output_size)
+        )
+        
+        # Uncertainty/std prediction
+        self.std_predictor = nn.Sequential(
+            nn.Linear(fc_input_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, edge_output_size),
+            nn.Softplus()  # Ensure positive std
+        )
+        
+        # Edge confidence (probability that edge is visible)
+        self.confidence_predictor = nn.Sequential(
+            nn.Linear(fc_input_size, 128),
+            nn.ReLU(),
+            nn.Linear(128, EdgeConstants.NUM_ROAD_EDGES),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, features: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Args:
+            features: Multi-scale features from encoder [B, C, H, W]
+        
+        Returns:
+            Dictionary with:
+                - edges: [B, 2, 33, 2] - (left/right, points, y_offset/z_height)
+                - edge_stds: [B, 2, 33, 2] - uncertainties
+                - edge_probs: [B, 2] - confidence per edge
+        """
+        x = self.conv1(features)
+        x = self.conv2(x)
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
+        
+        # Predict edge coordinates
+        edges_flat = self.edge_predictor(x)
+        edges = edges_flat.view(-1, EdgeConstants.NUM_ROAD_EDGES, 
+                                EdgeConstants.IDX_N, EdgeConstants.EDGE_WIDTH)
+        
+        # Predict uncertainties
+        stds_flat = self.std_predictor(x)
+        edge_stds = stds_flat.view(-1, EdgeConstants.NUM_ROAD_EDGES,
+                                   EdgeConstants.IDX_N, EdgeConstants.EDGE_WIDTH)
+        
+        # Predict confidence
+        edge_probs = self.confidence_predictor(x)
+        
+        return {
+            'edges': edges,
+            'edge_stds': edge_stds,
+            'edge_probs': edge_probs
+        }
 
 
 class TelemetryLSTM(nn.Module):
@@ -183,21 +299,29 @@ class TelemetryLSTM(nn.Module):
 
 class RacingLineOptimizer(nn.Module):
     """
-    U-Net based model for track segmentation
-    Simplified architecture focused on track detection only
+    openpilot-inspired dual-head architecture:
+    - Segmentation head for track area
+    - Edge regression head for explicit left/right boundaries
     """
     
-    def __init__(self, use_unet: bool = True):
+    def __init__(self, use_unet: bool = True, use_edge_head: bool = True):
         """
-        Initialize racing line optimizer with U-Net
+        Initialize racing line optimizer with U-Net and edge regression
         
         Args:
             use_unet: Compatibility parameter (always uses U-Net now)
+            use_edge_head: Enable explicit edge coordinate prediction
         """
         super(RacingLineOptimizer, self).__init__()
         
+        self.use_edge_head = use_edge_head
+        
         # Use U-Net for track segmentation
         self.vision_model = UNet(in_channels=3, num_classes=3, base_filters=64)
+        
+        # Edge regression head (openpilot-inspired)
+        if use_edge_head:
+            self.edge_head = EdgeRegressionHead(in_channels=256, base_filters=128)
         
         # Confidence estimation from segmentation output
         self.confidence_head = nn.Sequential(
@@ -219,19 +343,27 @@ class RacingLineOptimizer(nn.Module):
             nn.Linear(32, 2)  # Output: (optimal_x, optimal_y) on track
         )
         
-    def forward(self, image: torch.Tensor, telemetry_seq: torch.Tensor):
+    def forward(self, image: torch.Tensor, telemetry_seq: torch.Tensor) -> Tuple:
         """
-        Forward pass
+        Forward pass with dual heads
         
         Args:
             image: Input image [B, 3, H, W]
             telemetry_seq: Telemetry sequence [B, T, features]
             
         Returns:
-            Tuple of (optimal_line, segmentation_map, confidence)
+            Tuple of (optimal_line, segmentation_map, confidence, edge_outputs)
+            where edge_outputs is dict with 'edges', 'edge_stds', 'edge_probs'
+            or None if use_edge_head=False
         """
         # U-Net segmentation
         seg_map = self.vision_model(image)
+        
+        # Edge regression (openpilot-style)
+        edge_outputs = None
+        if self.use_edge_head:
+            features = self.vision_model.get_features(image)
+            edge_outputs = self.edge_head(features)
         
         # Confidence estimation
         confidence_scalar = self.confidence_head(seg_map)
@@ -245,7 +377,7 @@ class RacingLineOptimizer(nn.Module):
         combined = torch.cat([vision_features, telemetry_pred], dim=1)
         optimal_line = self.fusion(combined)
         
-        return optimal_line, seg_map, confidence
+        return optimal_line, seg_map, confidence, edge_outputs
 
 
 class ModelTrainer:
